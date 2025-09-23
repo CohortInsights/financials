@@ -2,6 +2,7 @@ import pandas as pd
 import pytest
 from financials.calculator import FinancialsCalculator
 
+
 # Fake GoogleDrive stub (not used in normalization tests)
 class DummyDrive:
     def __init__(self):
