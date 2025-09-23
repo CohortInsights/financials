@@ -1,6 +1,8 @@
 # Financials
 
-A Flask + Google Drive–based tool for downloading, normalizing, and analyzing my personal financial statement data.
+A Flask + Google Drive–based tool for downloading, normalizing, and analyzing financial statement data.
+
+---
 
 ## 📂 Project Structure
 
@@ -8,15 +10,28 @@ A Flask + Google Drive–based tool for downloading, normalizing, and analyzing 
 financials/
 ├── financials/
 │   ├── calculator.py       # Normalizes CSVs from multiple financial sources
-│   ├── drive.py            # Handles Google Drive API access
-│   ├── web.py              # Flask entry point (routes, dashboard)
-│   └── templates/          # HTML/CSS/JS for dashboard
+│   ├── drive.py            # Handles Google Drive API access only
+│   ├── web.py              # Flask entry point (routes, dashboard, main program)
+│   └── templates/          # HTML, CSS, and JS for dashboard UI
 ├── tests/
 │   └── test_calculator.py  # Unit tests for normalization logic
 ├── pyproject.toml          # Poetry dependencies + config
-├── README.md               # Project documentation
-└── .gitignore              # Ignores secrets and junk
+├── README.md               # Project documentation (context capsule)
+└── .gitignore              # Ignores secrets, build junk, virtualenvs
 ```
+
+---
+
+## 🧩 Conventions
+
+- **drive.py** → strictly for Google Drive API access  
+- **calculator.py** → `FinancialsCalculator` class handles all data processing (normalization, analysis)  
+- **web.py** → Flask app entry point, routes, dashboard integration  
+- **templates/** → Dashboard frontend (`dashboard.html`, `styles.css`, `code.js`)  
+- **tests/** → Unit tests, run with pytest under Poetry  
+- Secrets (OAuth JSON + pickle tokens) are ignored via `.gitignore`  
+
+---
 
 ## ⚙️ Setup
 
@@ -27,14 +42,18 @@ poetry install
 poetry shell
 ```
 
+---
+
 ## 🔑 Credentials
 
 You must provide your own Google Drive OAuth credentials.
 
-- Place your client JSON file under `json/` (ignored by Git).  
-- On first run, the app will generate a token file (`token.<name>.pickle`) also ignored by Git.  
+- Place client JSON under `json/` (ignored by Git).  
+- On first run, the app generates a token file (`token.<name>.pickle`) also ignored by Git.  
 
-⚠️ Do **not** commit these files — they are secrets.
+⚠️ Do **not** commit these files — GitHub push protection will block it.
+
+---
 
 ## 🧪 Running Tests
 
@@ -42,29 +61,41 @@ You must provide your own Google Drive OAuth credentials.
 poetry run pytest
 ```
 
+Tests validate CSV normalizations across sources (BMO, Citi, Chase, PayPal).  
+All are mapped into a consistent schema:
+
+- `date`  
+- `description`  
+- `amount`  
+- `account` (from filename prefix)  
+- `category` (if present)  
+
+---
+
 ## 🚀 Running the App
 
 ```bash
 poetry run flask --app financials/web.py run
 ```
 
-Then open: <http://localhost:5000/dashboard>
+Open: <http://localhost:5000/dashboard>
 
-## 📝 Notes
+---
 
-- All financial sources (BMO, Citi, CapitalOne/Discover, PayPal, etc.) are normalized into a consistent schema:
+## 📌 Current Status
 
-  - `date`
-  - `source` (derived from filename prefix)
-  - `description`
-  - `amount`
-  - `type` (e.g., category, “Credit/Debit”, etc.)
+- ✅ BMO, Citi, Chase, PayPal CSV normalization implemented and unit-tested  
+- ⏳ Schwab (investment transactions) not yet normalized  
+- ✅ GitHub repo initialized under CohortInsights org  
+- ✅ `.gitignore` and README cleaned  
+- ✅ Secrets removed from history  
 
-- Use `FinancialsCalculator` for programmatic access to normalized data.
+---
 
-## 📌 Roadmap
+## 🗺️ Roadmap
 
 - [x] Normalize CSVs from cashflow accounts  
 - [ ] Add Schwab investment account normalization  
 - [ ] Build dashboard visualizations (trends, balances, categories)  
-- [ ] Add edit/export features in the UI
+- [ ] Add edit/export features in the UI  
+- [ ] CI/CD or GitHub Actions for automated testing  
