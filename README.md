@@ -15,6 +15,7 @@ financials/
 │   ├── calculator.py       # Normalizes CSVs from multiple financial sources
 │   ├── drive.py            # Handles Google Drive API access only
 │   ├── web.py              # Flask entry point (routes, dashboard, main program)
+│   ├── db.py               # Connections and serialization of DataFrames to MongoDB
 │   └── templates/          # HTML, CSS, and JS for dashboard UI
 ├── tests/
 │   └── test_calculator.py  # Unit tests for normalization logic
@@ -22,7 +23,7 @@ financials/
 ├── README.md               # Project documentation (context capsule)
 └── .gitignore              # Ignores secrets, build junk, virtualenvs
 ```
-
+[__init__.py](financials%2F__init__.py)
 ---
 
 ## 🧩 Conventions
@@ -99,7 +100,8 @@ Open: <http://localhost:5000/dashboard>
 ## 🗺️ Roadmap
 
 - [x] Normalize CSVs from cashflow accounts  
-- [ ] Add MongoDB as data source and import financials data on background thread 
+- [x] Create MongoDB users and DB and verify connection
+- [ ] Import financials data on background thread and store in MongoDB collection
 - [ ] Build dashboard visualizations (trends, balances, categories)  
 - [ ] Add Schwab investment account normalization  
 - [ ] Add edit/export features in the UI  
