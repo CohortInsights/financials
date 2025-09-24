@@ -4,6 +4,9 @@ A Flask + Google Drive–based tool for downloading, normalizing, and analyzing 
 
 ---
 
+## Repository
+https://github.com/CohortInsights/financials
+
 ## 📂 Project Structure
 
 ```
@@ -75,6 +78,7 @@ All are mapped into a consistent schema:
 ## 🚀 Running the App
 
 ```bash
+<fron within root directory of project>
 poetry run flask --app financials/web.py run
 ```
 
@@ -95,7 +99,8 @@ Open: <http://localhost:5000/dashboard>
 ## 🗺️ Roadmap
 
 - [x] Normalize CSVs from cashflow accounts  
-- [ ] Add Schwab investment account normalization  
+- [ ] Add MongoDB as data source and import financials data on background thread 
 - [ ] Build dashboard visualizations (trends, balances, categories)  
+- [ ] Add Schwab investment account normalization  
 - [ ] Add edit/export features in the UI  
 - [ ] CI/CD or GitHub Actions for automated testing  
