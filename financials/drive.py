@@ -104,16 +104,19 @@ class GoogleDrive:
 
     def query(self, query, page_size=500):
         """
-        Perform a query and return the file results
+        Perform a query and return the file results (ignores trashed files).
         """
-        drive = self.drive
-        response = drive.files().list(
+        if "trashed" not in query:
+            query = f"({query}) and trashed = false"
+
+        response = self.drive.files().list(
             q=query,
             pageSize=page_size,
             spaces='drive',
-            fields='nextPageToken, files(id, name, size, mimeType)'
+            fields='nextPageToken, files(id, name, size, mimeType, trashed)'
         ).execute()
         return response.get('files')
+
 
     def by_name(self, name):
         """
