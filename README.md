@@ -61,7 +61,7 @@ Do **not** commit these credentials.
 
     poetry run pytest -v
 
-Tests cover normalization for BMO, Citi, Chase, and PayPal CSVs.
+Tests cover normalization for BMO, Citi, Chase, PayPal, and Capitol One.
 
 ---
 
@@ -89,6 +89,11 @@ You can now import normalized financials directly into MongoDB.
    - Inserts all new transactions while skipping duplicates automatically.
 4. Logs results (inserted vs. skipped) to the console.
 
+### New in this version
+- **Capitol One normalization** is now supported, handling Debit/Credit style CSVs automatically.
+- Each normalized record includes a consistent schema:  
+  `date, source, description, amount, type, id`
+
 ### Example (pseudo-code)
     from financials.calculator import FinancialsCalculator
     from financials.db import get_mongo_collection
@@ -107,13 +112,13 @@ You can now import normalized financials directly into MongoDB.
 
 ## 📌 Current Status
 
-- ✅ CSV normalization for BMO, Citi, Chase, PayPal  
+- ✅ CSV normalization for BMO, Citi, Chase, PayPal, **Capitol One**  
 - ✅ MongoDB schema and connection verified  
 - ✅ Transaction ID generation implemented  
 - ✅ Data ingestion via `main_ingest.py` to MongoDB  
 - ✅ Unit tests validated for normalization logic  
-- ⏳ Capitol One normalization pending  
 - ⏳ Schwab investment account parsing pending  
+- ⏳ Checks CSV normalization pending  
 
 ---
 
@@ -121,7 +126,8 @@ You can now import normalized financials directly into MongoDB.
 
 ### Data Ingestion
 - ✅ Import normalized data and store in MongoDB (with transaction IDs)  
-- [ ] Add Capitol One and Schwab account normalizers  
+- ✅ Add Capitol One normalizer  
+- [ ] Add Schwab and Checks account normalizers  
 
 ### Persistence
 - [ ] Extend MongoDB schema for multi-year rollups and indexing  

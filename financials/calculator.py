@@ -93,11 +93,12 @@ class FinancialsCalculator:
             return self._normalize_bmo(df, source)
         if s == "citi":
             return self._normalize_citi(df, source)
-        if s in ["discover", "capitalone"]:
+        if s == "capitolone":
+            return self._normalize_capitol_one(df, source)
+        if s == "discover":
             return self._normalize_generic_card(df, source)
         if s == "paypal":
             return self._normalize_paypal(df, source)
-
         raise ValueError(f"No normalizer implemented for source {source}")
 
     # --------------------------
@@ -186,6 +187,21 @@ class FinancialsCalculator:
     # --------------------------
     # Normalizers (unchanged)
     # --------------------------
+
+
+    def _normalize_capitol_one(self, df: pd.DataFrame, source: str) -> pd.DataFrame:
+        """Normalize Capitol One CSV exports into the standard schema."""
+        out = pd.DataFrame()
+        # Prefer Posted Date for consistency with other card CSVs
+        date_col = "Posted Date" if "Posted Date" in df.columns else df.columns[1]
+        out["date"] = pd.to_datetime(df[date_col], errors="coerce").dt.date
+        out["source"] = source
+        out["description"] = df["Description"].astype(str)
+        debit = pd.to_numeric(df["Debit"], errors="coerce").fillna(0)
+        credit = pd.to_numeric(df["Credit"], errors="coerce").fillna(0)
+        out["amount"] = credit - debit
+        out["type"] = ["Credit" if c > 0 else "Debit" if d > 0 else "" for c, d in zip(credit, debit)]
+        return out[["date", "source", "description", "amount", "type"]]
 
     def _normalize_bmo(self, df: pd.DataFrame, source: str) -> pd.DataFrame:
         out = pd.DataFrame()
