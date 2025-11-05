@@ -59,7 +59,7 @@ class FinancialsCalculator:
     # Cashflow CSV normalization
     # ------------------------------------------------------------------
 
-    def load_year_data(self, year: str, logger : Logger  = None) -> Optional[pd.DataFrame]:
+    def load_year_data(self, year: str, logger: Logger = None) -> Optional[pd.DataFrame]:
         """Download and normalize all CSVs for a given year into one DataFrame."""
         contents = self.get_contents_by_year(year)
         if not contents:
@@ -73,13 +73,19 @@ class FinancialsCalculator:
             source = name.split("-")[0]  # prefix before -YEAR
             try:
                 raw = self.get_document_bytes(item)
-                df = pd.read_csv(BytesIO(raw))
+                df = pd.read_csv(
+                    BytesIO(raw),
+                    on_bad_lines="skip",      # ← skip malformed rows
+                    encoding="utf-8-sig",     # ← strip BOM if present
+                    skip_blank_lines=True,
+                )
                 if logger:
                     logger.info(f"Loaded {len(df)} rows from {name}")
                 norm = self.normalize_csv(df, source)
                 frames.append(norm)
             except Exception as e:
-                logger.error(f"Skipping {name}: {e}")
+                if logger:
+                    logger.error(f"Skipping {name}: {e}")
 
         if not frames:
             return None
@@ -155,8 +161,15 @@ class FinancialsCalculator:
         # Ensure unique index
         collection.create_index("id", unique=True)
 
-        # Fix date serialization: convert datetime.date → datetime.datetime
+        # Drop invalid or missing dates before conversion
         if "date" in df.columns:
+            missing_count = df["date"].isna().sum()
+            if missing_count > 0 and logger:
+                logger.warning(f"⚠️ Skipping {missing_count} rows with missing dates")
+            # Make a real copy to avoid SettingWithCopyWarning
+            df = df[df["date"].notna()].copy()
+
+            # Convert datetime.date → datetime.datetime for Mongo compatibility
             df["date"] = df["date"].apply(
                 lambda d: (
                     datetime.datetime.combine(d, datetime.time.min)
@@ -214,18 +227,38 @@ class FinancialsCalculator:
         return out[["date", "source", "description", "amount", "type"]]
 
     def _normalize_citi(self, df: pd.DataFrame, source: str) -> pd.DataFrame:
+        """Normalize Citi credit card CSVs into the standard schema."""
         out = pd.DataFrame()
+
+        # Consistent date parsing (Citi uses MM/DD/YYYY)
         date_col = "Date" if "Date" in df.columns else df.columns[0]
-        out["date"] = pd.to_datetime(df[date_col], errors="coerce").dt.date
+        out["date"] = pd.to_datetime(
+            df[date_col], format="%m/%d/%Y", errors="coerce"
+        ).dt.date
+
         out["source"] = source
+
         desc_col = "Description" if "Description" in df.columns else df.columns[1]
         out["description"] = df[desc_col].astype(str)
-        debit_col = "Debit" if "Debit" in df.columns else None
-        credit_col = "Credit" if "Credit" in df.columns else None
-        debit = pd.to_numeric(df[debit_col], errors="coerce").fillna(0) if debit_col else 0
-        credit = pd.to_numeric(df[credit_col], errors="coerce").fillna(0) if credit_col else 0
+
+        # Always produce Series for debit/credit even if column missing
+        debit = (
+            pd.to_numeric(df["Debit"], errors="coerce").fillna(0)
+            if "Debit" in df.columns
+            else pd.Series(0, index=df.index)
+        )
+        credit = (
+            pd.to_numeric(df["Credit"], errors="coerce").fillna(0)
+            if "Credit" in df.columns
+            else pd.Series(0, index=df.index)
+        )
+
         out["amount"] = credit - debit
-        out["type"] = ["Credit" if c > 0 else "Debit" if d > 0 else "" for c, d in zip(credit, debit)]
+        out["type"] = [
+            "Credit" if c > 0 else "Debit" if d > 0 else ""
+            for c, d in zip(credit, debit)
+        ]
+
         return out[["date", "source", "description", "amount", "type"]]
 
     def _normalize_generic_card(self, df: pd.DataFrame, source: str) -> pd.DataFrame:
