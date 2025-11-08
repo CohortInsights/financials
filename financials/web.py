@@ -92,32 +92,51 @@ def plot_dashboard():
 @app.route("/api/transactions")
 def api_transactions():
     """
-    Returns JSON transaction data for the selected year, used by the dashboard DataTable.
+    Returns JSON transaction data for the selected year(s), used by the dashboard DataTable.
+    Supports either:
+        ?year=2025                → single year
+        ?years=2023,2024,2025     → multiple discrete years
     """
     from flask import request, jsonify
     from financials import db as db_module
     import pandas as pd
     from datetime import datetime
+    import numpy as np
 
     transactions = db_module.db["transactions"]
 
-    # Get the selected year from the query string
-    year = request.args.get("year")
+    # --- Parse query parameters ---
+    years_param = request.args.get("years")
+    year_param = request.args.get("year")
+
     query = {}
 
-    if year and year.isdigit():
-        start = datetime(int(year), 1, 1)
-        end = datetime(int(year) + 1, 1, 1)
+    if years_param:
+        # Parse comma-separated list
+        year_list = [int(y) for y in years_param.split(",") if y.strip().isdigit()]
+        if year_list:
+            # Match only selected discrete years (not a continuous range)
+            query = {"$expr": {"$in": [{"$year": "$date"}, year_list]}}
+    elif year_param and year_param.isdigit():
+        # Fallback: single year
+        start = datetime(int(year_param), 1, 1)
+        end = datetime(int(year_param) + 1, 1, 1)
         query = {"date": {"$gte": start, "$lt": end}}
+    else:
+        # Default: current year (2025)
+        current_year = datetime.now().year
+        query = {"$expr": {"$in": [{"$year": "$date"}, [current_year]]}}
 
-    # Fetch documents for the year
+    # --- Query MongoDB ---
     cursor = transactions.find(query, {"_id": 0})
     df = pd.DataFrame(list(cursor))
 
-    if not df.empty and "date" in df.columns:
+    # --- Clean and format results ---
+    if not df.empty:
+        if "date" in df.columns and pd.api.types.is_datetime64_any_dtype(df["date"]):
+            df["date"] = df["date"].dt.strftime("%Y-%m-%d")
+        if "amount" in df.columns:
+            df["amount"] = df["amount"].fillna(0)
         df = df.replace({np.nan: ""})
-        # Convert datetime to string for JSON serialization
-        df["date"] = df["date"].dt.strftime("%Y-%m-%d")
 
-    return_values = jsonify(df.to_dict(orient="records"))
-    return return_values
+    return jsonify(df.to_dict(orient="records"))

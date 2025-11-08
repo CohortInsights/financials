@@ -75,7 +75,7 @@ Then open: <http://127.0.0.1:5000/dashboard>
 
 ## 🧲 Data Ingestion
 
-You can now import normalized financials directly into MongoDB.
+You can import normalized financials directly into MongoDB.
 
     poetry run python main_ingest.py
 
@@ -89,20 +89,6 @@ You can now import normalized financials directly into MongoDB.
 Each normalized record follows this schema:  
 `date, source, description, amount, type, id`
 
-### Example
-    from financials.calculator import FinancialsCalculator
-    from financials.drive import GoogleDrive
-    from financials import db as db_module
-
-    drive = GoogleDrive("roger_drive")
-    calc = FinancialsCalculator(drive)
-    df = calc.load_year_data("2024")
-    df = calc.add_transaction_ids(df)
-
-    transactions = db_module.db["transactions"]
-    inserted = calc.save_to_collection(df, transactions)
-    print(f"Inserted {inserted} new transactions")
-
 ---
 
 ## 🌐 Dashboard and API
@@ -111,11 +97,11 @@ Each normalized record follows this schema:
 Access the live UI at `/dashboard`.
 
 Features:
-- “Since” dropdown to choose starting year (e.g., 2025, 2024, 2023)
+- Multi-year selection via checkboxes (e.g., 2023, 2024, 2025)
 - Scrollable, paginated, sortable **DataTable**
-- Per-column **text filters**
+- Per-column **filter row in the table footer**
 - Default sort by **Date (descending)**
-- Auto-refresh on year selection
+- Auto-refresh on checkbox selection
 
 ### Backend API
 The `/api/transactions` route serves JSON data directly from MongoDB.
@@ -129,13 +115,21 @@ The `/api/transactions` route serves JSON data directly from MongoDB.
         import numpy as np
 
         transactions = db_module.db["transactions"]
-        year = request.args.get("year")
+        years_param = request.args.get("years")
+        year_param = request.args.get("year")
         query = {}
 
-        if year and year.isdigit():
-            start = datetime(int(year), 1, 1)
-            end = datetime(int(year) + 1, 1, 1)
+        if years_param:
+            year_list = [int(y) for y in years_param.split(",") if y.strip().isdigit()]
+            if year_list:
+                query = {"$expr": {"$in": [{"$year": "$date"}, year_list]}}
+        elif year_param and year_param.isdigit():
+            start = datetime(int(year_param), 1, 1)
+            end = datetime(int(year_param) + 1, 1, 1)
             query = {"date": {"$gte": start, "$lt": end}}
+        else:
+            current_year = datetime.now().year
+            query = {"$expr": {"$in": [{"$year": "$date"}, [current_year]]}}
 
         cursor = transactions.find(query, {"_id": 0})
         df = pd.DataFrame(list(cursor))
@@ -150,9 +144,10 @@ The `/api/transactions` route serves JSON data directly from MongoDB.
         return jsonify(df.to_dict(orient="records"))
 
 This route:
-- Filters by `datetime` range for the selected year  
-- Converts `NaN` to `""` (and numeric NaN to 0)  
-- Returns clean, valid JSON for DataTables consumption
+- Supports single-year (`year=`) or multi-year (`years=2023,2025`) queries  
+- Uses `$expr` + `$in` to match discrete years  
+- Converts `NaN` to `""` and `NaN` amounts to `0`  
+- Returns valid JSON for the dashboard’s DataTable
 
 ---
 
@@ -160,55 +155,52 @@ This route:
 
 ### code.js
 Implements:
-- Year dropdown and reload control  
-- Dynamic `/api/transactions?year=YYYY` fetching  
-- DataTables initialization with per-column filters and default date sort  
-- Full client-side filtering, searching, and paging  
+- Checkbox-driven multi-year selection  
+- Dynamic `/api/transactions?years=YYYY,...` fetching  
+- DataTables initialization with footer-based filters  
+- Full **multi-column sorting (Shift+click)**  
+- Automatic reload on checkbox change
 
 ### dashboard.html
-- Hosts dropdown + button controls  
-- Displays DataTable (`<table id="transactions">`)  
-- Imports DataTables JS/CSS via CDN  
-- Injects `user_data` JSON into the page for JS use
+- Replaces year dropdown with checkbox group  
+- Adds `<tfoot>` filter row to DataTable for robust sorting  
+- Loads external JS/CSS (DataTables, jQuery, custom scripts)
 
 ### styles.css
-- Theming for dropdowns and buttons  
-- Responsive layout for the data table  
-- Styled filter inputs below each column header  
+- Centered, styled year checkbox bar  
+- Consistent button design  
+- Filter row styled to match table header (light gray, clean borders)
 
 ---
 
 ## 📊 Example Output
 
-The dashboard table now includes:
 | Date | Source | Description | Amount | Type |
 |------|---------|--------------|--------|------|
 | 2025-09-03 | PayPal | StubHub, Inc | $12.60 | Credit |
+| 2024-07-10 | BMO | Target Stores | -$48.00 | Debit |
 | ... | ... | ... | ... | ... |
 
-Use column filters to search instantly (e.g., type “PayPal” or “Credit”).
+Use footer filters to refine results and Shift+click headers for multi-column sorts.
 
 ---
 
 ## 📌 Current Status
 
-- ✅ CSV normalization (BMO, Citi, Chase, PayPal, Capitol One)  
-- ✅ MongoDB connection + `datetime` filtering  
-- ✅ Data ingestion + ID generation  
-- ✅ Flask API (`/api/transactions`) returning clean JSON  
-- ✅ Dashboard with DataTables sorting, filtering, pagination  
-- ⏳ Schwab and Checks normalizers pending  
-- ⏳ Charts and category breakdowns next  
+- ✅ Multi-year checkbox selection  
+- ✅ Footer filter row (full DataTables sorting restored)  
+- ✅ Mongo `$expr` multi-year filtering  
+- ✅ Clean JSON API  
+- ⏳ Future: chart visualizations via `/api/summary`  
 
 ---
 
 ## 🗺️ Roadmap
 
 ### Visualization
-- ✅ Table view with filtering and sorting  
-- [ ] Add numeric range filter for `Amount` column  
-- [ ] Add chart visualizations (balances, categories, trends)  
-- [ ] CSV export option  
+- [ ] Add `/api/summary` endpoint for chart data  
+- [ ] Integrate Chart.js or Plotly.js visualizations  
+- [ ] Support client-driven chart refreshes tied to year filters  
 
 ### Data Ingestion
 - ✅ Multi-year imports to MongoDB  
