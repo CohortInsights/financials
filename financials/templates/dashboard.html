@@ -6,13 +6,20 @@
     <title>Chylla Financials Dashboard</title>
     <link rel="stylesheet" type="text/css" href="templates/styles.css">
 
+    <!-- DataTables CSS -->
+    <link rel="stylesheet" href="https://cdn.datatables.net/1.13.8/css/jquery.dataTables.min.css">
+
     <!-- Inject user_data as JSON for external JS to read -->
     <script id="user-data" type="application/json">
         {{ user_data|tojson }}
     </script>
 
+    <!-- jQuery + DataTables JS -->
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+    <script src="https://cdn.datatables.net/1.13.8/js/jquery.dataTables.min.js"></script>
+
     <!-- Load external JavaScript -->
-    <script src="templates/code.js"></script>
+    <script src="templates/code.js" defer></script>
 </head>
 
 <body>
@@ -23,6 +30,20 @@
 
         <!-- Reload Button -->
         <button class="myButton" id="reloadButton">Reload</button>
+    </div>
+
+    <div id="table-container">
+        <table id="transactions" class="display" style="width:100%">
+            <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>Source</th>
+                    <th>Description</th>
+                    <th>Amount</th>
+                    <th>Type</th>
+                </tr>
+            </thead>
+        </table>
     </div>
 </body>
 </html>

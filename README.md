@@ -16,7 +16,7 @@ https://github.com/CohortInsights/financials
     │   ├── __init__.py         # Package initializer
     │   ├── calculator.py       # Normalizes CSVs and persists data to MongoDB
     │   ├── drive.py            # Handles Google Drive API access
-    │   ├── web.py              # Flask routes and dashboard
+    │   ├── web.py              # Flask routes and dashboard API
     │   ├── db.py               # MongoDB connection utilities
     │   └── templates/          # HTML/CSS/JS for dashboard UI
     ├── main_ingest.py          # Standalone ingestion entry point
@@ -33,10 +33,10 @@ https://github.com/CohortInsights/financials
 
 - **drive.py** → Google Drive API access only  
 - **calculator.py** → `FinancialsCalculator` handles normalization + persistence  
-- **db.py** → manages MongoDB client connections  
+- **db.py** → manages MongoDB client connections (`db_module.db["transactions"]`)  
 - **main_ingest.py** → CLI entry for background ingestion (`poetry run python main_ingest.py`)  
-- **web.py** → Flask app entry point (dashboard integration)  
-- **templates/** → front-end dashboard (`dashboard.html`, `styles.css`, `code.js`)  
+- **web.py** → Flask app entry point with dashboard and JSON API routes  
+- **templates/** → dashboard front-end (`dashboard.html`, `styles.css`, `code.js`)  
 
 ---
 
@@ -83,61 +83,139 @@ You can now import normalized financials directly into MongoDB.
 `main_ingest.py` calls the ingestion routine defined in `financials/ingest.py`, which:
 1. Uses the `FinancialsCalculator` class to download and normalize all statement CSVs for each year.  
 2. Calls `add_transaction_ids(df)` to generate consistent IDs derived from each row’s source, date, description, and amount.  
-3. Connects to MongoDB and passes the enriched DataFrame to `save_to_collection(df, collection)`, which:
-   - Ensures a unique index on `id`.
-   - Converts dates to Mongo-compatible types.
-   - Inserts all new transactions while skipping duplicates automatically.
-4. Logs results (inserted vs. skipped) to the console.
+3. Connects to MongoDB and passes the enriched DataFrame to the `transactions` collection.  
+4. Inserts new rows, skips duplicates, and logs summary info.  
 
-### New in this version
-- **Capitol One normalization** is now supported, handling Debit/Credit style CSVs automatically.
-- Each normalized record includes a consistent schema:  
-  `date, source, description, amount, type, id`
+Each normalized record follows this schema:  
+`date, source, description, amount, type, id`
 
-### Example (pseudo-code)
+### Example
     from financials.calculator import FinancialsCalculator
-    from financials.db import get_mongo_collection
     from financials.drive import GoogleDrive
+    from financials import db as db_module
 
-    drive = GoogleDrive()                          # authenticated Drive client
+    drive = GoogleDrive("roger_drive")
     calc = FinancialsCalculator(drive)
-    df = calc.load_year_data("2024")               # normalize CSVs for 2024
-    df = calc.add_transaction_ids(df)              # assign unique transaction IDs
+    df = calc.load_year_data("2024")
+    df = calc.add_transaction_ids(df)
 
-    collection = get_mongo_collection("financials")
-    inserted = calc.save_to_collection(df, collection)
+    transactions = db_module.db["transactions"]
+    inserted = calc.save_to_collection(df, transactions)
     print(f"Inserted {inserted} new transactions")
+
+---
+
+## 🌐 Dashboard and API
+
+### Dashboard
+Access the live UI at `/dashboard`.
+
+Features:
+- “Since” dropdown to choose starting year (e.g., 2025, 2024, 2023)
+- Scrollable, paginated, sortable **DataTable**
+- Per-column **text filters**
+- Default sort by **Date (descending)**
+- Auto-refresh on year selection
+
+### Backend API
+The `/api/transactions` route serves JSON data directly from MongoDB.
+
+    @bp.route("/api/transactions")
+    def api_transactions():
+        from flask import request, jsonify
+        from financials import db as db_module
+        import pandas as pd
+        from datetime import datetime
+        import numpy as np
+
+        transactions = db_module.db["transactions"]
+        year = request.args.get("year")
+        query = {}
+
+        if year and year.isdigit():
+            start = datetime(int(year), 1, 1)
+            end = datetime(int(year) + 1, 1, 1)
+            query = {"date": {"$gte": start, "$lt": end}}
+
+        cursor = transactions.find(query, {"_id": 0})
+        df = pd.DataFrame(list(cursor))
+
+        if not df.empty:
+            if "date" in df.columns and pd.api.types.is_datetime64_any_dtype(df["date"]):
+                df["date"] = df["date"].dt.strftime("%Y-%m-%d")
+            if "amount" in df.columns:
+                df["amount"] = df["amount"].fillna(0)
+            df = df.replace({np.nan: ""})
+
+        return jsonify(df.to_dict(orient="records"))
+
+This route:
+- Filters by `datetime` range for the selected year  
+- Converts `NaN` to `""` (and numeric NaN to 0)  
+- Returns clean, valid JSON for DataTables consumption
+
+---
+
+## 🖥️ Front-End Behavior
+
+### code.js
+Implements:
+- Year dropdown and reload control  
+- Dynamic `/api/transactions?year=YYYY` fetching  
+- DataTables initialization with per-column filters and default date sort  
+- Full client-side filtering, searching, and paging  
+
+### dashboard.html
+- Hosts dropdown + button controls  
+- Displays DataTable (`<table id="transactions">`)  
+- Imports DataTables JS/CSS via CDN  
+- Injects `user_data` JSON into the page for JS use
+
+### styles.css
+- Theming for dropdowns and buttons  
+- Responsive layout for the data table  
+- Styled filter inputs below each column header  
+
+---
+
+## 📊 Example Output
+
+The dashboard table now includes:
+| Date | Source | Description | Amount | Type |
+|------|---------|--------------|--------|------|
+| 2025-09-03 | PayPal | StubHub, Inc | $12.60 | Credit |
+| ... | ... | ... | ... | ... |
+
+Use column filters to search instantly (e.g., type “PayPal” or “Credit”).
 
 ---
 
 ## 📌 Current Status
 
-- ✅ CSV normalization for BMO, Citi, Chase, PayPal, **Capitol One**  
-- ✅ MongoDB schema and connection verified  
-- ✅ Transaction ID generation implemented  
-- ✅ Data ingestion via `main_ingest.py` to MongoDB  
-- ✅ Unit tests validated for normalization logic  
-- ⏳ Schwab investment account parsing pending  
-- ⏳ Checks CSV normalization pending  
+- ✅ CSV normalization (BMO, Citi, Chase, PayPal, Capitol One)  
+- ✅ MongoDB connection + `datetime` filtering  
+- ✅ Data ingestion + ID generation  
+- ✅ Flask API (`/api/transactions`) returning clean JSON  
+- ✅ Dashboard with DataTables sorting, filtering, pagination  
+- ⏳ Schwab and Checks normalizers pending  
+- ⏳ Charts and category breakdowns next  
 
 ---
 
 ## 🗺️ Roadmap
 
+### Visualization
+- ✅ Table view with filtering and sorting  
+- [ ] Add numeric range filter for `Amount` column  
+- [ ] Add chart visualizations (balances, categories, trends)  
+- [ ] CSV export option  
+
 ### Data Ingestion
-- ✅ Import normalized data and store in MongoDB (with transaction IDs)  
-- ✅ Add Capitol One normalizer  
+- ✅ Multi-year imports to MongoDB  
 - [ ] Add Schwab and Checks account normalizers  
 
-### Persistence
-- [ ] Extend MongoDB schema for multi-year rollups and indexing  
-
-### Visualization
-- [ ] Dashboard charts for trends, balances, and categories  
-- [ ] UI edit/export features  
-
 ### DevOps
-- [ ] GitHub Actions for automated testing  
+- [ ] Add GitHub Actions for automated testing  
 
 ---
 

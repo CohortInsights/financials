@@ -58,3 +58,63 @@
     right: 10px;
     cursor: pointer;
 }
+
+/* --- Transaction Table Layout --- */
+
+#table-container {
+    margin-top: 80px;        /* pushes table below the top controls */
+    padding: 20px;
+    width: 95%;
+    margin-left: auto;
+    margin-right: auto;
+}
+
+/* DataTables theme alignment */
+.dataTables_wrapper {
+    font-family: Arial, sans-serif;
+    font-size: 15px;
+    color: #222;
+}
+
+.dataTables_wrapper .dataTables_filter {
+    float: right;
+    text-align: right;
+    margin-bottom: 10px;
+}
+
+.dataTables_wrapper .dataTables_paginate {
+    float: right;
+    text-align: right;
+    margin-top: 10px;
+}
+
+table.dataTable thead th {
+    background-color: #ededed;
+    color: darkblue;
+    font-weight: bold;
+    text-align: left;
+}
+
+table.dataTable tbody td {
+    background-color: #fafafa;
+    padding: 6px 10px;
+}
+
+table.dataTable tbody tr:nth-child(even) td {
+    background-color: #f1f1f1;
+}
+
+/* Filter input row styling */
+table.dataTable thead .filters th {
+    background-color: #f5f5f5;
+    padding: 4px;
+}
+
+table.dataTable thead input {
+    width: 100%;
+    box-sizing: border-box;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    padding: 3px 6px;
+    font-size: 13px;
+}
