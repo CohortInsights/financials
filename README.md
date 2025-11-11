@@ -18,8 +18,12 @@ https://github.com/CohortInsights/financials
     │   ├── drive.py            # Handles Google Drive API access
     │   ├── web.py              # Flask routes and dashboard API
     │   ├── db.py               # MongoDB connection utilities
-    │   └── templates/          # HTML/CSS/JS for dashboard UI
+    │   └── templates/          # Front-end assets for the dashboard UI
+    │       ├── dashboard.html  # Main HTML interface for viewing transactions
+    │       ├── styles.css      # Shared stylesheet (layout, buttons, filter row)
+    │       └── code.js         # DataTables configuration, sorting, filtering logic
     ├── main_ingest.py          # Standalone ingestion entry point
+    ├── main.py                 # Standalone entry point that invokes web.py
     ├── tests/
     │   └── test_calculator.py  # Unit tests for normalization logic
     ├── pyproject.toml          # Poetry dependencies and config
@@ -36,7 +40,10 @@ https://github.com/CohortInsights/financials
 - **db.py** → manages MongoDB client connections (`db_module.db["transactions"]`)  
 - **main_ingest.py** → CLI entry for background ingestion (`poetry run python main_ingest.py`)  
 - **web.py** → Flask app entry point with dashboard and JSON API routes  
-- **templates/** → dashboard front-end (`dashboard.html`, `styles.css`, `code.js`)  
+- **templates/** → contains all front-end assets (HTML, CSS, and JS) that power the `/dashboard` view:
+  - `dashboard.html` defines layout, year checkboxes, and DataTable structure  
+  - `code.js` handles multi-year selection, dynamic filtering, and sorting (Shift+click support)  
+  - `styles.css` provides consistent visual styling for table headers, filters, and controls  
 
 ---
 
@@ -61,7 +68,7 @@ Do **not** commit these credentials.
 
     poetry run pytest -v
 
-Tests cover normalization for BMO, Citi, Chase, PayPal, and Capitol One.
+Tests cover normalization for BMO, Citi, Chase, PayPal, Capitol One, and Schwab.
 
 ---
 
@@ -88,6 +95,19 @@ You can import normalized financials directly into MongoDB.
 
 Each normalized record follows this schema:  
 `date, source, description, amount, type, id`
+
+### Newly Supported Source: Schwab
+The 2025 update adds a **Schwab normalizer** that extends the standard schema with these additional fields:
+
+| Field | Example | Description |
+|--------|----------|-------------|
+| `action` | `Buy` | Schwab’s action type (Buy, Dividend, Deposit, etc.) |
+| `symbol` | `AAPL` | Stock or fund symbol |
+| `quantity` | `5.0` | Number of shares |
+| `price` | `175.35` | Executed price per share |
+
+All other sources (BMO, Citi, Discover, PayPal, CapitolOne) continue to emit the core five-field schema.  
+MongoDB’s schemaless design allows Schwab rows to coexist seamlessly with prior data.
 
 ---
 
@@ -151,28 +171,6 @@ This route:
 
 ---
 
-## 🖥️ Front-End Behavior
-
-### code.js
-Implements:
-- Checkbox-driven multi-year selection  
-- Dynamic `/api/transactions?years=YYYY,...` fetching  
-- DataTables initialization with footer-based filters  
-- Full **multi-column sorting (Shift+click)**  
-- Automatic reload on checkbox change
-
-### dashboard.html
-- Replaces year dropdown with checkbox group  
-- Adds `<tfoot>` filter row to DataTable for robust sorting  
-- Loads external JS/CSS (DataTables, jQuery, custom scripts)
-
-### styles.css
-- Centered, styled year checkbox bar  
-- Consistent button design  
-- Filter row styled to match table header (light gray, clean borders)
-
----
-
 ## 📊 Example Output
 
 | Date | Source | Description | Amount | Type |
@@ -191,6 +189,7 @@ Use footer filters to refine results and Shift+click headers for multi-column so
 - ✅ Footer filter row (full DataTables sorting restored)  
 - ✅ Mongo `$expr` multi-year filtering  
 - ✅ Clean JSON API  
+- ✅ Schwab CSV ingestion and normalization  
 - ⏳ Future: chart visualizations via `/api/summary`  
 
 ---
@@ -204,7 +203,8 @@ Use footer filters to refine results and Shift+click headers for multi-column so
 
 ### Data Ingestion
 - ✅ Multi-year imports to MongoDB  
-- [ ] Add Schwab and Checks account normalizers  
+- ✅ Add Schwab account normalizer  
+- [ ] Add Checks normalizer (optional, for extended data)  
 
 ### DevOps
 - [ ] Add GitHub Actions for automated testing  

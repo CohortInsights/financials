@@ -1,6 +1,8 @@
-import pandas as pd
 import pytest
-from financials.calculator import FinancialsCalculator
+import io
+import pandas as pd
+import numpy as np
+from financials.calculator import FinancialsCalculator, _parse_schwab_date
 
 
 # Fake GoogleDrive stub (not used in normalization tests)
@@ -79,3 +81,57 @@ def test_paypal_normalization(calc):
     assert len(df) == 1
     assert df.iloc[0]["amount"] == 351.00
     assert df.iloc[0]["type"] == "Credit"
+
+
+def test_normalize_schwab_basic(monkeypatch):
+    """Ensure Schwab CSVs normalize cleanly and produce expected columns/types."""
+
+    # --- Prepare sample CSV ---
+    csv_data = """Date,Action,Symbol,Description,Quantity,Price,Fees & Comm,Amount
+08/15/2025,MoneyLink Transfer,,Transfer to Checking,,,$0.00,-$500.00
+08/18/2025 as of 08/15/2025,Bank Interest,,SCHWAB BANK INT,,,$0.00,$1.23
+08/20/2025,Buy,AAPL,Apple Inc,5,175.35,$0.00,-$876.75
+08/25/2025,Dividend,AAPL,Dividend Received,,,,$10.00
+"""
+    df_raw = pd.read_csv(io.StringIO(csv_data))
+
+    # --- Run through normalizer directly ---
+    calc = FinancialsCalculator(drive=None)
+    df_norm = calc._normalize_schwab(df_raw, "Schwab")
+
+    # --- Column validation ---
+    expected_cols = [
+        "date",
+        "source",
+        "description",
+        "amount",
+        "type",
+        "action",
+        "symbol",
+        "quantity",
+        "price",
+    ]
+    for col in expected_cols:
+        assert col in df_norm.columns, f"Missing column {col}"
+
+    # --- Basic data checks ---
+    assert (df_norm["source"] == "Schwab").all()
+    assert not df_norm["date"].isna().any(), "Dates should all parse correctly"
+    assert df_norm["amount"].dtype.kind in "fi", "Amount should be numeric"
+
+    # --- Specific content checks ---
+    # The 'as of' date should parse as 2025-08-18
+    parsed = _parse_schwab_date("08/18/2025 as of 08/15/2025")
+    assert str(parsed.date()) == "2025-08-18"
+
+    # Check classification logic
+    debit_rows = df_norm[df_norm["type"] == "Debit"]
+    credit_rows = df_norm[df_norm["type"] == "Credit"]
+    assert len(debit_rows) > 0 and len(credit_rows) > 0
+
+    # Trade row check
+    trade = df_norm.loc[df_norm["action"] == "Buy"].iloc[0]
+    assert trade["symbol"] == "AAPL"
+    assert np.isclose(trade["quantity"], 5.0)
+    assert np.isclose(trade["price"], 175.35)
+    assert trade["amount"] < 0

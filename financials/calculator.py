@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import datetime
+import numpy as np
 from pymongo.errors import BulkWriteError
 from typing import Dict, List, Optional, Any
 from functools import cached_property
@@ -75,8 +76,8 @@ class FinancialsCalculator:
                 raw = self.get_document_bytes(item)
                 df = pd.read_csv(
                     BytesIO(raw),
-                    on_bad_lines="skip",      # ← skip malformed rows
-                    encoding="utf-8-sig",     # ← strip BOM if present
+                    on_bad_lines="skip",  # ← skip malformed rows
+                    encoding="utf-8-sig",  # ← strip BOM if present
                     skip_blank_lines=True,
                 )
                 if logger:
@@ -105,6 +106,8 @@ class FinancialsCalculator:
             return self._normalize_generic_card(df, source)
         if s == "paypal":
             return self._normalize_paypal(df, source)
+        if s == "schwab":
+            return self._normalize_schwab(df, source)
         raise ValueError(f"No normalizer implemented for source {source}")
 
     # --------------------------
@@ -201,6 +204,59 @@ class FinancialsCalculator:
     # Normalizers (unchanged)
     # --------------------------
 
+    def _normalize_schwab(self, raw: pd.DataFrame, source: str) -> pd.DataFrame:
+        """
+        Normalize a Schwab transactions CSV into the canonical schema:
+        date, source, description, amount, type,
+        plus Schwab-specific fields: action, symbol, quantity, price.
+        """
+        df = raw.copy()
+
+        # Parse Date (handles formats like '08/18/2025 as of 08/15/2025')
+        if "Date" not in df.columns:
+            raise ValueError("Schwab CSV missing 'Date' column.")
+        df["date"] = df["Date"].apply(_parse_schwab_date)
+
+        # Description and Amount
+        df["description"] = df.get("Description", "").astype(str).str.strip()
+        if "Amount" not in df.columns:
+            raise ValueError("Schwab CSV missing 'Amount' column.")
+        df["amount"] = df["Amount"].apply(_parse_numeric)
+
+        # Extra Schwab fields
+        df["action"] = df.get("Action", "").astype(str).str.strip()
+        df["symbol"] = df.get("Symbol", "").astype(str).str.strip()
+        df["quantity"] = df.get("Quantity", np.nan).apply(_parse_numeric)
+        df["price"] = df.get("Price", np.nan).apply(_parse_numeric)
+
+        # Transaction type
+        def _classify(amount):
+            if pd.isna(amount):
+                return ""
+            if amount > 0:
+                return "Credit"
+            if amount < 0:
+                return "Debit"
+            return ""
+
+        df["type"] = df["amount"].apply(_classify)
+        df["source"] = source
+
+        normalized = df[
+            [
+                "date",
+                "source",
+                "description",
+                "amount",
+                "type",
+                "action",
+                "symbol",
+                "quantity",
+                "price",
+            ]
+        ].dropna(subset=["date"])
+
+        return normalized
 
     def _normalize_capitol_one(self, df: pd.DataFrame, source: str) -> pd.DataFrame:
         """Normalize Capitol One CSV exports into the standard schema."""
@@ -222,7 +278,8 @@ class FinancialsCalculator:
         out["date"] = pd.to_datetime(df[date_col], errors="coerce").dt.date
         out["source"] = source
         out["description"] = df["DESCRIPTION"] if "DESCRIPTION" in df.columns else df.loc[:, df.columns[1]].astype(str)
-        out["amount"] = pd.to_numeric(df["AMOUNT"] if "AMOUNT" in df.columns else df.loc[:, df.columns[2]], errors="coerce")
+        out["amount"] = pd.to_numeric(df["AMOUNT"] if "AMOUNT" in df.columns else df.loc[:, df.columns[2]],
+                                      errors="coerce")
         out["type"] = df["TYPE"] if "TYPE" in df.columns else ""
         return out[["date", "source", "description", "amount", "type"]]
 
@@ -311,3 +368,27 @@ class FinancialsCalculator:
         out["type"] = out["amount"].apply(lambda x: "Credit" if x > 0 else "Debit")
         out = out.loc[status.str.lower() == "completed"]
         return out[["date", "source", "description", "amount", "type"]]
+
+
+def _parse_schwab_date(value: str) -> pd.Timestamp:
+    """Handle Schwab dates like '08/18/2025 as of 08/15/2025'."""
+    if pd.isna(value):
+        return pd.NaT
+    text = str(value).strip()
+    if " as of " in text:
+        text = text.split(" as of ")[0].strip()
+    return pd.to_datetime(text, errors="coerce", format="%m/%d/%Y")
+
+
+def _parse_numeric(value):
+    """Parse Schwab-style numeric values like '$1,234.56'."""
+    if pd.isna(value):
+        return np.nan
+    text = str(value).strip()
+    if not text:
+        return np.nan
+    text = text.replace("$", "").replace(",", "")
+    try:
+        return float(text)
+    except ValueError:
+        return np.nan
