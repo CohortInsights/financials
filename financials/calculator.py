@@ -18,14 +18,6 @@ class FinancialsCalculator:
     """Helper to browse, fetch, and normalize statement files from Google Drive."""
 
     def __init__(self, drive: "GoogleDrive"):
-        """
-        Initialize with an authenticated GoogleDrive instance.
-
-        Parameters
-        ----------
-        drive : GoogleDrive
-            Drive client used for all queries and downloads.
-        """
         self.drive = drive
 
     def refresh(self) -> None:
@@ -40,20 +32,17 @@ class FinancialsCalculator:
         return {item.get("name"): item for item in folder_list}
 
     def get_folder_names(self) -> List[str]:
-        """List the names of statement folders (reverse-sorted)."""
         names = list(self.statement_folders.keys())
         names.sort(reverse=True)
         return names
 
     def get_contents_by_year(self, year: str) -> Optional[List[Dict[str, Any]]]:
-        """Get the files within a specific year folder."""
         item = self.statement_folders.get(year)
         if item is None:
             return None
         return self.drive.in_dir(item.get("id"))
 
     def get_document_bytes(self, item: Dict[str, Any]) -> bytes:
-        """Download a Drive file into memory."""
         return self.drive.download(item.get("id"))
 
     # ------------------------------------------------------------------
@@ -66,35 +55,62 @@ class FinancialsCalculator:
         if not contents:
             return None
 
+        # --- Preload Checks mapping for this year ---
+        check_map = None
+        for item in contents:
+            name = item.get("name", "")
+            if name.lower().startswith("checks") and name.lower().endswith(".csv"):
+                try:
+                    raw = self.get_document_bytes(item)
+                    df_checks = pd.read_csv(
+                        BytesIO(raw),
+                        on_bad_lines="skip",
+                        encoding="utf-8-sig",
+                        skip_blank_lines=True,
+                    )
+                    check_map = self._normalize_checks(df_checks)
+                    if logger:
+                        logger.info(f"Loaded {len(check_map)} check entries from {name}")
+                except Exception as e:
+                    if logger:
+                        logger.error(f"Skipping {name}: {e}")
+                break
+        # -------------------------------------------------------------
+
         frames = []
         for item in contents:
             name = item.get("name", "")
             if not name.lower().endswith(".csv"):
                 continue
-            source = name.split("-")[0]  # prefix before -YEAR
+            source = name.split("-")[0]
             try:
                 raw = self.get_document_bytes(item)
                 df = pd.read_csv(
                     BytesIO(raw),
-                    on_bad_lines="skip",  # ← skip malformed rows
-                    encoding="utf-8-sig",  # ← strip BOM if present
+                    on_bad_lines="skip",
+                    encoding="utf-8-sig",
                     skip_blank_lines=True,
                 )
                 if logger:
                     logger.info(f"Loaded {len(df)} rows from {name}")
-                norm = self.normalize_csv(df, source)
+
+                if source.lower() == "bmo":
+                    norm = self._normalize_bmo(df, source, check_map)
+                else:
+                    norm = self.normalize_csv(df, source)
+
                 frames.append(norm)
             except Exception as e:
                 if logger:
                     logger.error(f"Skipping {name}: {e}")
 
+        frames = [f for f in frames if not f.empty]
         if not frames:
             return None
 
         return pd.concat(frames, ignore_index=True)
 
     def normalize_csv(self, df: pd.DataFrame, source: str) -> pd.DataFrame:
-        """Normalize one bank/account CSV to the common schema."""
         s = source.lower()
         if s == "bmo":
             return self._normalize_bmo(df, source)
@@ -108,6 +124,9 @@ class FinancialsCalculator:
             return self._normalize_paypal(df, source)
         if s == "schwab":
             return self._normalize_schwab(df, source)
+        if s == "checks":
+            # Already handled upstream; skip redundant normalization
+            return pd.DataFrame(columns=["date", "source", "description", "amount", "type", "assignment"])
         raise ValueError(f"No normalizer implemented for source {source}")
 
     # --------------------------
@@ -115,12 +134,6 @@ class FinancialsCalculator:
     # --------------------------
 
     def add_transaction_ids(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Add a stable transaction ID to each row if not already present.
-
-        ID = last 16 hex digits of sha256(source|date|description|amount)
-             with all characters normalized to lowercase and only [a-z0-9] kept.
-        """
         if "id" not in df.columns:
             df["id"] = None
 
@@ -137,10 +150,7 @@ class FinancialsCalculator:
                 amount = "0.00"
 
             content = f"{source}{date}{description}{amount}"
-
-            # Keep only letters and digits
             content = re.sub(r"[^a-z0-9.]", "", content)
-
             h = hashlib.sha256(content.encode("utf-8")).hexdigest()
             return h[-16:]
 
@@ -148,31 +158,13 @@ class FinancialsCalculator:
         return df
 
     def save_to_collection(self, df: pd.DataFrame, collection, logger=None):
-        """
-        Ensure unique index on 'id', then insert rows (skip duplicates).
-        Converts datetime.date -> datetime.datetime so Mongo can store it.
-
-        Parameters
-        ----------
-        df : pd.DataFrame
-            DataFrame of normalized transactions
-        collection : pymongo.collection.Collection
-            MongoDB collection
-        logger : logging.Logger or None
-            Logger to use for messages. If None, no logging is performed.
-        """
-        # Ensure unique index
         collection.create_index("id", unique=True)
 
-        # Drop invalid or missing dates before conversion
         if "date" in df.columns:
             missing_count = df["date"].isna().sum()
             if missing_count > 0 and logger:
                 logger.warning(f"⚠️ Skipping {missing_count} rows with missing dates")
-            # Make a real copy to avoid SettingWithCopyWarning
             df = df[df["date"].notna()].copy()
-
-            # Convert datetime.date → datetime.datetime for Mongo compatibility
             df["date"] = df["date"].apply(
                 lambda d: (
                     datetime.datetime.combine(d, datetime.time.min)
@@ -201,35 +193,101 @@ class FinancialsCalculator:
             return inserted
 
     # --------------------------
-    # Normalizers (unchanged)
+    # Normalizers (new + updated)
+    # --------------------------
+
+    def _normalize_checks(self, df: pd.DataFrame) -> dict[int, dict[str, str]]:
+        """
+        Convert Checks CSV into mapping {check_number: {'payee': ..., 'assignment': ...}}.
+        Prepends 'Expense.' to all assignments.
+        """
+        required = {"Check", "Pay To", "Assignment"}
+        if not required.issubset(df.columns):
+            raise ValueError(f"Checks CSV must include {required}")
+
+        mapping = {}
+        for _, row in df.iterrows():
+            try:
+                check_no = int(str(row["Check"]).strip())
+                payee = str(row["Pay To"]).strip()
+                assignment = str(row["Assignment"]).strip()
+                if assignment and not assignment.lower().startswith("expense."):
+                    assignment = f"Expense.{assignment}"
+                if check_no and payee:
+                    mapping[check_no] = {"payee": payee, "assignment": assignment}
+            except ValueError:
+                continue
+        return mapping
+
+    def _normalize_bmo(
+        self,
+        df: pd.DataFrame,
+        source: str,
+        check_map: dict[int, dict[str, str]] | None = None
+    ) -> pd.DataFrame:
+        """Normalize BMO CSV exports, optionally enriching with check payee names and assignments."""
+        out = pd.DataFrame()
+        date_col = "POSTED DATE" if "POSTED DATE" in df.columns else df.columns[0]
+        out["date"] = pd.to_datetime(df[date_col], errors="coerce").dt.date
+        out["source"] = source
+        out["description"] = (
+            df["DESCRIPTION"]
+            if "DESCRIPTION" in df.columns
+            else df.loc[:, df.columns[1]].astype(str)
+        )
+        out["amount"] = pd.to_numeric(
+            df["AMOUNT"] if "AMOUNT" in df.columns else df.loc[:, df.columns[2]],
+            errors="coerce"
+        )
+        out["type"] = df["TYPE"] if "TYPE" in df.columns else ""
+        out["assignment"] = ""  # always include assignment field
+
+        # --- New enrichment using check reference ---
+        if check_map:
+            ref_candidates = []
+            for col in ["TRANSACTION REFERENCE NUMBER", "FI TRANSACTION REFERENCE"]:
+                if col in df.columns:
+                    ref_candidates = df[col]
+                    break
+
+            if len(ref_candidates) > 0:
+                ref_nums = pd.to_numeric(ref_candidates, errors="coerce").fillna(0).astype(int)
+                enriched_desc = []
+                enriched_assign = []
+
+                for ref, desc in zip(ref_nums, out["description"]):
+                    if ref in check_map:
+                        enriched_desc.append(check_map[ref]["payee"])
+                        enriched_assign.append(check_map[ref]["assignment"])
+                    else:
+                        enriched_desc.append(desc)
+                        enriched_assign.append("")
+                out["description"] = enriched_desc
+                out["assignment"] = enriched_assign
+        # ------------------------------------------------
+
+        return out[
+            ["date", "source", "description", "amount", "type", "assignment"]
+        ]
+
+    # --------------------------
+    # Other Normalizers (unchanged)
     # --------------------------
 
     def _normalize_schwab(self, raw: pd.DataFrame, source: str) -> pd.DataFrame:
-        """
-        Normalize a Schwab transactions CSV into the canonical schema:
-        date, source, description, amount, type,
-        plus Schwab-specific fields: action, symbol, quantity, price.
-        """
         df = raw.copy()
-
-        # Parse Date (handles formats like '08/18/2025 as of 08/15/2025')
         if "Date" not in df.columns:
             raise ValueError("Schwab CSV missing 'Date' column.")
         df["date"] = df["Date"].apply(_parse_schwab_date)
-
-        # Description and Amount
         df["description"] = df.get("Description", "").astype(str).str.strip()
         if "Amount" not in df.columns:
             raise ValueError("Schwab CSV missing 'Amount' column.")
         df["amount"] = df["Amount"].apply(_parse_numeric)
-
-        # Extra Schwab fields
         df["action"] = df.get("Action", "").astype(str).str.strip()
         df["symbol"] = df.get("Symbol", "").astype(str).str.strip()
         df["quantity"] = df.get("Quantity", np.nan).apply(_parse_numeric)
         df["price"] = df.get("Price", np.nan).apply(_parse_numeric)
 
-        # Transaction type
         def _classify(amount):
             if pd.isna(amount):
                 return ""
@@ -243,25 +301,12 @@ class FinancialsCalculator:
         df["source"] = source
 
         normalized = df[
-            [
-                "date",
-                "source",
-                "description",
-                "amount",
-                "type",
-                "action",
-                "symbol",
-                "quantity",
-                "price",
-            ]
+            ["date", "source", "description", "amount", "type", "action", "symbol", "quantity", "price"]
         ].dropna(subset=["date"])
-
         return normalized
 
     def _normalize_capitol_one(self, df: pd.DataFrame, source: str) -> pd.DataFrame:
-        """Normalize Capitol One CSV exports into the standard schema."""
         out = pd.DataFrame()
-        # Prefer Posted Date for consistency with other card CSVs
         date_col = "Posted Date" if "Posted Date" in df.columns else df.columns[1]
         out["date"] = pd.to_datetime(df[date_col], errors="coerce").dt.date
         out["source"] = source
@@ -272,50 +317,17 @@ class FinancialsCalculator:
         out["type"] = ["Credit" if c > 0 else "Debit" if d > 0 else "" for c, d in zip(credit, debit)]
         return out[["date", "source", "description", "amount", "type"]]
 
-    def _normalize_bmo(self, df: pd.DataFrame, source: str) -> pd.DataFrame:
-        out = pd.DataFrame()
-        date_col = "POSTED DATE" if "POSTED DATE" in df.columns else df.columns[0]
-        out["date"] = pd.to_datetime(df[date_col], errors="coerce").dt.date
-        out["source"] = source
-        out["description"] = df["DESCRIPTION"] if "DESCRIPTION" in df.columns else df.loc[:, df.columns[1]].astype(str)
-        out["amount"] = pd.to_numeric(df["AMOUNT"] if "AMOUNT" in df.columns else df.loc[:, df.columns[2]],
-                                      errors="coerce")
-        out["type"] = df["TYPE"] if "TYPE" in df.columns else ""
-        return out[["date", "source", "description", "amount", "type"]]
-
     def _normalize_citi(self, df: pd.DataFrame, source: str) -> pd.DataFrame:
-        """Normalize Citi credit card CSVs into the standard schema."""
         out = pd.DataFrame()
-
-        # Consistent date parsing (Citi uses MM/DD/YYYY)
         date_col = "Date" if "Date" in df.columns else df.columns[0]
-        out["date"] = pd.to_datetime(
-            df[date_col], format="%m/%d/%Y", errors="coerce"
-        ).dt.date
-
+        out["date"] = pd.to_datetime(df[date_col], format="%m/%d/%Y", errors="coerce").dt.date
         out["source"] = source
-
         desc_col = "Description" if "Description" in df.columns else df.columns[1]
         out["description"] = df[desc_col].astype(str)
-
-        # Always produce Series for debit/credit even if column missing
-        debit = (
-            pd.to_numeric(df["Debit"], errors="coerce").fillna(0)
-            if "Debit" in df.columns
-            else pd.Series(0, index=df.index)
-        )
-        credit = (
-            pd.to_numeric(df["Credit"], errors="coerce").fillna(0)
-            if "Credit" in df.columns
-            else pd.Series(0, index=df.index)
-        )
-
+        debit = pd.to_numeric(df["Debit"], errors="coerce").fillna(0) if "Debit" in df.columns else pd.Series(0, index=df.index)
+        credit = pd.to_numeric(df["Credit"], errors="coerce").fillna(0) if "Credit" in df.columns else pd.Series(0, index=df.index)
         out["amount"] = credit - debit
-        out["type"] = [
-            "Credit" if c > 0 else "Debit" if d > 0 else ""
-            for c, d in zip(credit, debit)
-        ]
-
+        out["type"] = ["Credit" if c > 0 else "Debit" if d > 0 else "" for c, d in zip(credit, debit)]
         return out[["date", "source", "description", "amount", "type"]]
 
     def _normalize_generic_card(self, df: pd.DataFrame, source: str) -> pd.DataFrame:
@@ -371,7 +383,6 @@ class FinancialsCalculator:
 
 
 def _parse_schwab_date(value: str) -> pd.Timestamp:
-    """Handle Schwab dates like '08/18/2025 as of 08/15/2025'."""
     if pd.isna(value):
         return pd.NaT
     text = str(value).strip()
@@ -381,7 +392,6 @@ def _parse_schwab_date(value: str) -> pd.Timestamp:
 
 
 def _parse_numeric(value):
-    """Parse Schwab-style numeric values like '$1,234.56'."""
     if pd.isna(value):
         return np.nan
     text = str(value).strip()

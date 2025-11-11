@@ -1,6 +1,6 @@
 # Financials
 
-A Flask + Google Drive–based tool for downloading, normalizing, storing, and analyzing financial statement data.
+A Flask + Google Drive–based tool for downloading, normalizing, storing, and analyzing personal financial data.
 
 ---
 
@@ -18,12 +18,13 @@ https://github.com/CohortInsights/financials
     │   ├── drive.py            # Handles Google Drive API access
     │   ├── web.py              # Flask routes and dashboard API
     │   ├── db.py               # MongoDB connection utilities
-    │   └── templates/          # Front-end assets for the dashboard UI
-    │       ├── dashboard.html  # Main HTML interface for viewing transactions
-    │       ├── styles.css      # Shared stylesheet (layout, buttons, filter row)
-    │       └── code.js         # DataTables configuration, sorting, filtering logic
+    │   ├── templates/          # HTML/CSS/JS for dashboard UI
+    │   │   ├── dashboard.html  # DataTable dashboard
+    │   │   ├── code.js         # Client-side fetch + DataTable behavior
+    │   │   └── styles.css      # UI styling for dashboard
+    │   └── scripts/
+    │       └── delete_entries.py   # Utility to delete all docs for a given source
     ├── main_ingest.py          # Standalone ingestion entry point
-    ├── main.py                 # Standalone entry point that invokes web.py
     ├── tests/
     │   └── test_calculator.py  # Unit tests for normalization logic
     ├── pyproject.toml          # Poetry dependencies and config
@@ -40,10 +41,8 @@ https://github.com/CohortInsights/financials
 - **db.py** → manages MongoDB client connections (`db_module.db["transactions"]`)  
 - **main_ingest.py** → CLI entry for background ingestion (`poetry run python main_ingest.py`)  
 - **web.py** → Flask app entry point with dashboard and JSON API routes  
-- **templates/** → contains all front-end assets (HTML, CSS, and JS) that power the `/dashboard` view:
-  - `dashboard.html` defines layout, year checkboxes, and DataTable structure  
-  - `code.js` handles multi-year selection, dynamic filtering, and sorting (Shift+click support)  
-  - `styles.css` provides consistent visual styling for table headers, filters, and controls  
+- **templates/** → dashboard front-end (`dashboard.html`, `styles.css`, `code.js`)  
+- **scripts/delete_entries.py** → deletes transactions by source (`--source bmo`, etc.)
 
 ---
 
@@ -68,7 +67,7 @@ Do **not** commit these credentials.
 
     poetry run pytest -v
 
-Tests cover normalization for BMO, Citi, Chase, PayPal, Capitol One, and Schwab.
+Tests cover normalization for BMO, Citi, Chase, PayPal, Capitol One, Schwab, and Checks.
 
 ---
 
@@ -87,27 +86,72 @@ You can import normalized financials directly into MongoDB.
     poetry run python main_ingest.py
 
 ### What Happens
-`main_ingest.py` calls the ingestion routine defined in `financials/ingest.py`, which:
+`main_ingest.py` calls the ingestion routine defined in `financials/calculator.py`, which:
 1. Uses the `FinancialsCalculator` class to download and normalize all statement CSVs for each year.  
-2. Calls `add_transaction_ids(df)` to generate consistent IDs derived from each row’s source, date, description, and amount.  
-3. Connects to MongoDB and passes the enriched DataFrame to the `transactions` collection.  
-4. Inserts new rows, skips duplicates, and logs summary info.  
+2. Pre-loads `Checks-YEAR.csv` (if present) and builds a mapping `{check_no → {payee, assignment}}`.  
+3. Normalizes BMO, Citi, PayPal, CapitolOne, Schwab, etc., replacing any BMO “DDA CHECK” transactions with the corresponding **Pay To** and **Assignment** fields from the Checks file.  
+4. Calls `add_transaction_ids(df)` to generate consistent IDs derived from each row’s source, date, description, and amount.  
+5. Connects to MongoDB and inserts new rows, skipping duplicates, logging counts.  
 
 Each normalized record follows this schema:  
-`date, source, description, amount, type, id`
+`date, source, description, amount, type, assignment, [action, symbol, quantity, price]`
 
-### Newly Supported Source: Schwab
-The 2025 update adds a **Schwab normalizer** that extends the standard schema with these additional fields:
+---
 
-| Field | Example | Description |
-|--------|----------|-------------|
-| `action` | `Buy` | Schwab’s action type (Buy, Dividend, Deposit, etc.) |
-| `symbol` | `AAPL` | Stock or fund symbol |
-| `quantity` | `5.0` | Number of shares |
-| `price` | `175.35` | Executed price per share |
+## 🧮 Normalization Details
 
-All other sources (BMO, Citi, Discover, PayPal, CapitolOne) continue to emit the core five-field schema.  
-MongoDB’s schemaless design allows Schwab rows to coexist seamlessly with prior data.
+### BMO + Checks Integration
+- When a **Checks-YEAR.csv** file is present, it is read first.  
+- Each BMO row with a matching `TRANSACTION REFERENCE NUMBER` or `FI TRANSACTION REFERENCE` is enriched with:
+  - `description` → replaced by the check’s “Pay To” value  
+  - `assignment` → the check’s “Assignment” value, prefixed with `Expense.` (e.g. “Expense.Charity.KOC”)  
+- Non-check rows remain unchanged.  
+
+Example:
+
+| POSTED DATE | DESCRIPTION | AMOUNT | TRANSACTION REF | TYPE | → | description | assignment |
+|--------------|--------------|---------|------------------|------|----|--------------|-------------|
+| 08/09/2024 | DDA CHECK | -26.34 | 9502 | Debit | → | St Christopher CP | Expense.Charity.Church |
+| 08/08/2024 | DDA CHECK | -100.00 | 9504 | Debit | → | City of Verona Dog Licensing | Expense.Taxes.Licenses |
+
+---
+
+### Schwab
+- Supports stock trades with fields `action`, `symbol`, `quantity`, and `price`.
+- All numeric parsing via `_parse_numeric()` handles `$` and `,` cleanup.
+- Adds `type` as Credit/Debit based on `amount` sign.
+
+---
+
+### Checks
+- Normalized separately to a lookup mapping `{check_no: {"payee", "assignment"}}`.
+- Prepends `"Expense."` to all assignments for downstream categorization.
+- Used only as enrichment; no direct insertion into Mongo.
+
+---
+
+### Schema Summary
+
+| Column | Description |
+|---------|-------------|
+| **date** | Transaction date |
+| **source** | Source name (e.g., BMO, Schwab, PayPal) |
+| **description** | Vendor or counterparty |
+| **amount** | Signed transaction value |
+| **type** | Credit or Debit |
+| **assignment** | Hierarchical spending category (from Checks or manual enrichment) |
+| **action / symbol / quantity / price** | Schwab-specific fields for trades |
+
+---
+
+## 🧰 Utility Scripts
+
+### Delete Entries
+
+    poetry run python -m financials.scripts.delete_entries --source bmo
+
+Deletes all MongoDB transactions from a specified source.  
+Prompts before deletion and logs counts.
 
 ---
 
@@ -117,80 +161,24 @@ MongoDB’s schemaless design allows Schwab rows to coexist seamlessly with prio
 Access the live UI at `/dashboard`.
 
 Features:
-- Multi-year selection via checkboxes (e.g., 2023, 2024, 2025)
+- Multi-year checkbox selection  
 - Scrollable, paginated, sortable **DataTable**
-- Per-column **filter row in the table footer**
-- Default sort by **Date (descending)**
-- Auto-refresh on checkbox selection
+- Footer row filters for each column  
+- Default sort by **Date (descending)**  
+- Supports multi-column sorting via **Shift+click**
 
 ### Backend API
-The `/api/transactions` route serves JSON data directly from MongoDB.
-
-    @bp.route("/api/transactions")
-    def api_transactions():
-        from flask import request, jsonify
-        from financials import db as db_module
-        import pandas as pd
-        from datetime import datetime
-        import numpy as np
-
-        transactions = db_module.db["transactions"]
-        years_param = request.args.get("years")
-        year_param = request.args.get("year")
-        query = {}
-
-        if years_param:
-            year_list = [int(y) for y in years_param.split(",") if y.strip().isdigit()]
-            if year_list:
-                query = {"$expr": {"$in": [{"$year": "$date"}, year_list]}}
-        elif year_param and year_param.isdigit():
-            start = datetime(int(year_param), 1, 1)
-            end = datetime(int(year_param) + 1, 1, 1)
-            query = {"date": {"$gte": start, "$lt": end}}
-        else:
-            current_year = datetime.now().year
-            query = {"$expr": {"$in": [{"$year": "$date"}, [current_year]]}}
-
-        cursor = transactions.find(query, {"_id": 0})
-        df = pd.DataFrame(list(cursor))
-
-        if not df.empty:
-            if "date" in df.columns and pd.api.types.is_datetime64_any_dtype(df["date"]):
-                df["date"] = df["date"].dt.strftime("%Y-%m-%d")
-            if "amount" in df.columns:
-                df["amount"] = df["amount"].fillna(0)
-            df = df.replace({np.nan: ""})
-
-        return jsonify(df.to_dict(orient="records"))
-
-This route:
-- Supports single-year (`year=`) or multi-year (`years=2023,2025`) queries  
-- Uses `$expr` + `$in` to match discrete years  
-- Converts `NaN` to `""` and `NaN` amounts to `0`  
-- Returns valid JSON for the dashboard’s DataTable
+The `/api/transactions` route serves JSON data directly from MongoDB with optional year filters.
 
 ---
 
 ## 📊 Example Output
 
-| Date | Source | Description | Amount | Type |
-|------|---------|--------------|--------|------|
-| 2025-09-03 | PayPal | StubHub, Inc | $12.60 | Credit |
-| 2024-07-10 | BMO | Target Stores | -$48.00 | Debit |
-| ... | ... | ... | ... | ... |
-
-Use footer filters to refine results and Shift+click headers for multi-column sorts.
-
----
-
-## 📌 Current Status
-
-- ✅ Multi-year checkbox selection  
-- ✅ Footer filter row (full DataTables sorting restored)  
-- ✅ Mongo `$expr` multi-year filtering  
-- ✅ Clean JSON API  
-- ✅ Schwab CSV ingestion and normalization  
-- ⏳ Future: chart visualizations via `/api/summary`  
+| Date | Source | Description | Amount | Type | Assignment |
+|------|---------|-------------|--------|------|-------------|
+| 2024-08-09 | BMO | St Christopher CP | -26.34 | Debit | Expense.Charity.Church |
+| 2025-09-03 | PayPal | StubHub, Inc | 12.60 | Credit |  |
+| 2024-07-10 | BMO | Target Stores | -48.00 | Debit | Expense.Personal.General |
 
 ---
 
@@ -198,16 +186,17 @@ Use footer filters to refine results and Shift+click headers for multi-column so
 
 ### Visualization
 - [ ] Add `/api/summary` endpoint for chart data  
-- [ ] Integrate Chart.js or Plotly.js visualizations  
-- [ ] Support client-driven chart refreshes tied to year filters  
+- [ ] Integrate Chart.js or Plotly visualizations  
+- [ ] Support assignment-based spending charts
 
 ### Data Ingestion
 - ✅ Multi-year imports to MongoDB  
-- ✅ Add Schwab account normalizer  
-- [ ] Add Checks normalizer (optional, for extended data)  
+- ✅ Add Schwab and Checks account normalizers  
+- ✅ BMO transactions enriched with check assignments  
+- [ ] Auto-categorization for non-check transactions
 
 ### DevOps
-- [ ] Add GitHub Actions for automated testing  
+- [ ] Add GitHub Actions for automated testing
 
 ---
 
