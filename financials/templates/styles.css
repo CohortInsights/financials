@@ -202,4 +202,11 @@ table.dataTable tfoot input {
     text-align: left;
     vertical-align: middle;
 }
+.modal-dialog {
+  max-width: 480px;         /* narrower than default 600px */
+}
+.modal-body {
+  max-height: 65vh;         /* keep modal from filling entire viewport */
+  overflow-y: auto;
+}
 
