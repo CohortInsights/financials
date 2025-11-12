@@ -193,7 +193,22 @@ The `/api/transactions` route serves JSON data directly from MongoDB with option
 - ✅ Multi-year imports to MongoDB  
 - ✅ Add Schwab and Checks account normalizers  
 - ✅ BMO transactions enriched with check assignments  
-- [ ] Auto-categorization for non-check transactions
+- [ ] Auto and manual categorization for non-check transactions (see Assignment of Transactions)
+
+### Assignment of Transactions
+- Transactions from all sources have an "Assignment" field in the form a.b.c (e.g. Expense, Expense.Food.Groceries, Income.WRS.Roger)
+- An assigment can be made manually from the UI or automatically from "rules"
+- Rules contain fields of ID, Category, Priority, Description, Min_Amount, Max_Amount
+- Rules are added/updated from the UI and stored in a Mongo Collection
+- The Description field of Rules is an implied filter that applies "contains" logic to each description of each transaction. [a,b means "a and b"] [a|b means "a or b"]
+- The values of Min_Amount, Max_Amount apply <=, >=, or between filters to each amount field of each transaction
+- If a transaction matches two or more rules, the rule with the highest priority takes precedencce
+- If a transaction matches two or more rules with the same priority, a warning is logged and the latest rule entry is applied
+- When a transaction is matched to a rule, the value of the rule "Assignment" is used to set the corresponding "Assignment" field of the transaction
+- A transaction with a null or blank assignment field has a default value of "Unspecified"
+- A new standalone script named assign_rules.py applies all existing rules in the Mongo collection to all existing transactions
+- A mongo collection named "transaction_assignments" tracks all manual and automated assignments
+- The fields of "transaction_assignments" are Transaction_ID, Type (auto | manual)
 
 ### DevOps
 - [ ] Add GitHub Actions for automated testing
