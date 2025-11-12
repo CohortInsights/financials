@@ -42,8 +42,8 @@ https://github.com/CohortInsights/financials
     │   │
     │   └── assign_rules.py         # Backend rule engine for automatic transaction categorization
     │
-    ├── main_ingest.py              # Standalone ingestion entry point (CLI)
-    ├── main.py                     # Entry point that invokes web.py
+    ├── main_ingest.py              # Standalone ingestion entry point (CLI) 
+    ├── main.py                     # Entry point that invokes financials/web.py
     │
     ├── tests/                      # Unit tests
     │   └── test_calculator.py      # Tests for normalization logic
@@ -52,6 +52,11 @@ https://github.com/CohortInsights/financials
     ├── README.md                   # Project documentation
     ├── .env                        # Environment variables (credentials, URIs)
     └── .gitignore                  # Ignores secrets and build junk
+
+### Mongo Collections
+- transactions : Stores all financial transactions (id, date, source, description, amount, type)
+- assignment_rules: Stores the rules that control automated assignments to transactions (id, assignment, priority, source, description, min_amount, max_amount)
+- transaction_assignments : Tracks all automated and manual assignments of transactions (id, assignment, type, timestamp)
 
 ---
 
@@ -151,20 +156,6 @@ Example:
 
 ---
 
-### Schema Summary
-
-| Column | Description |
-|---------|-------------|
-| **date** | Transaction date |
-| **source** | Source name (e.g., BMO, Schwab, PayPal) |
-| **description** | Vendor or counterparty |
-| **amount** | Signed transaction value |
-| **type** | Credit or Debit |
-| **assignment** | Hierarchical spending category (from Checks or manual enrichment) |
-| **action / symbol / quantity / price** | Schwab-specific fields for trades |
-
----
-
 ## 🧰 Utility Scripts
 
 ### Delete Entries
@@ -183,24 +174,13 @@ Access the live UI at `/dashboard`.
 
 Features:
 - Multi-year checkbox selection  
-- Scrollable, paginated, sortable **DataTable**
+- Scrollable, paginated, sortable transactions **DataTable**
 - Footer row filters for each column  
 - Default sort by **Date (descending)**  
 - Supports multi-column sorting via **Shift+click**
 
 ### Backend API
 The `/api/transactions` route serves JSON data directly from MongoDB with optional year filters.
-
----
-
-## 📊 Example Output
-
-| Date | Source | Description | Amount | Type | Assignment |
-|------|---------|-------------|--------|------|-------------|
-| 2024-08-09 | BMO | St Christopher CP | -26.34 | Debit | Expense.Charity.Church |
-| 2025-09-03 | PayPal | StubHub, Inc | 12.60 | Credit |  |
-| 2024-07-10 | BMO | Target Stores | -48.00 | Debit | Expense.Personal.General |
-
 ---
 
 ## 🗺️ Roadmap
@@ -216,22 +196,21 @@ The `/api/transactions` route serves JSON data directly from MongoDB with option
 - ✅ BMO transactions enriched with check assignments  
 - ✅ Manual categorization for transactions
 - ✅ UI for addition of rules
-- [ ] Auto categorization for transactions (see Assignment of Transactions)
+- [ ] Auto categorization for transactions (see Assignment of Transactions section)
 
 ### Assignment of Transactions
 - Transactions from all sources have an "Assignment" field in the form a.b.c (e.g. Expense, Expense.Food.Groceries, Income.WRS.Roger)
-- An assigment can be made manually from the UI or automatically from "rules"
-- Rules contain fields of ID, Category, Priority, Source, Description, Min_Amount, Max_Amount
-- Rules are added/updated from the UI and stored in a Mongo Collection
-- THe Source field of Rues is an implied filter that applies "equals" logic to each source of each transaction. [a,b means "a and b"] [a|b means "a or b"]
-- The Description field of Rules is an implied filter that applies "contains" logic to each description of each transaction. [a,b means "a and b"] [a|b means "a or b"]
+- An assigment can be made manually from the transactions table
+- Automated assignments are controlled by "rules" stored in the the assignment_rules collection
+- Rules contain fields of ID, Priority, Source, Description, Min_Amount, Max_Amount
+- Rules are added/updated from a table (CRUD) on the Rules tab and stored in the assignment_rules collection
+- THe Source field of Rules is an implied filter that applies "equals" logic to each source of each transaction. [a means "source equals a"] [ a,b means source equals (a or b) ]
+- The Description field of Rules is an implied filter that applies "contains" logic to each description of each transaction. [a,b means "desccription contains (a and b)"] [a|b means "description contains (a or b)"]
 - The values of Min_Amount, Max_Amount apply <=, >=, or between filters to each amount field of each transaction
-- If a transaction matches two or more rules, the rule with the highest priority takes precedencce
+- If a transaction matches two or more rules, the rule with the highest priority takes precedence
 - If a transaction matches two or more rules with the same priority, a warning is logged and the latest rule entry is applied
-- When a transaction is matched to a rule, the value of the rule "Assignment" is used to set the corresponding "Assignment" field of the transaction
-- A transaction with a null or blank assignment field has a default value of "Unspecified"
-- A new standalone script named assign_rules.py applies all existing rules in the Mongo collection to all existing transactions
-- A mongo collection named "transaction_assignments" tracks all manual and automated assignments
+- When a transaction is matched to a rule, the value of the rule "Assignment" is used to set the corresponding "Assignment" field of the transaction and an entry is made in transaction_assignments table
+- A standalone script named assign_rules.py applies all existing rules in the Mongo collection to all existing transactions. Transactions with manual assignments are excluded from auto assignment
 - The fields of "transaction_assignments" are Transaction_ID, Type (auto | manual)
 
 ### DevOps
