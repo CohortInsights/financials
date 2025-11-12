@@ -10,11 +10,12 @@ Collections involved:
 """
 
 import logging
+import time
 from datetime import datetime
+from pymongo import UpdateOne, InsertOne
 from financials import db as db_module
 
 logger = logging.getLogger(__name__)
-
 
 # ----------------------------------------------------------------------
 # MANUAL ASSIGNMENT
@@ -24,13 +25,6 @@ def set_transaction_assignment(transaction_id: str, assignment: str) -> dict:
     """
     Updates a transaction's 'assignment' field and logs it in the
     'transaction_assignments' collection as a manual assignment.
-
-    Args:
-        transaction_id (str): Unique logical ID (SHA-256 hash).
-        assignment (str): Hierarchical label, e.g. 'Expense.Food.Restaurant'.
-
-    Returns:
-        dict: {"success": True} or {"success": False, "message": "..."}
     """
     try:
         transactions = db_module.db["transactions"]
@@ -60,15 +54,8 @@ def set_transaction_assignment(transaction_id: str, assignment: str) -> dict:
 
 
 # ----------------------------------------------------------------------
-# AUTOMATIC ASSIGNMENT (Full Implementation)
+# AUTOMATIC ASSIGNMENT (Full Implementation with Bulk Writes)
 # ----------------------------------------------------------------------
-
-import time
-import logging
-from datetime import datetime
-from financials import db as db_module
-
-logger = logging.getLogger(__name__)
 
 def apply_all_rules() -> dict:
     """
@@ -77,6 +64,9 @@ def apply_all_rules() -> dict:
     Clears prior auto-assignments, reapplies all rules by priority,
     and logs detailed timings for each stage.
     """
+    import time
+    from pymongo import UpdateOne
+
     t0 = time.perf_counter()
     db = db_module.db
     logger.info("🔁 Starting rule reapplication: detailed timing enabled")
@@ -125,10 +115,12 @@ def apply_all_rules() -> dict:
         logger.info(f"📦 Reloaded {len(transactions)} transactions after clearing in {t_load:.3f}s")
 
         # ---------------------------------------------------------------
-        # 5️⃣ Apply rules
+        # 5️⃣ Apply rules (optimized single bulk-write phase)
         # ---------------------------------------------------------------
         t_apply_start = time.perf_counter()
         updated, unchanged = 0, 0
+        bulk_ops = []
+        log_records = []
 
         for txn in transactions:
             if txn["id"] in manual_ids:
@@ -137,19 +129,30 @@ def apply_all_rules() -> dict:
 
             assignment = find_best_assignment(txn, rules)
             if assignment:
-                db["transactions"].update_one(
-                    {"id": txn["id"]}, {"$set": {"assignment": assignment}}
+                bulk_ops.append(
+                    UpdateOne({"id": txn["id"]}, {"$set": {"assignment": assignment}})
                 )
-                db["transaction_assignments"].insert_one({
+                log_records.append({
                     "id": txn["id"],
                     "assignment": assignment,
                     "type": "auto",
-                    "timestamp": datetime.utcnow()
+                    "timestamp": datetime.utcnow(),
                 })
                 updated += 1
 
+        # Perform both updates in single logical phase
+        if bulk_ops:
+            res_txn = db["transactions"].bulk_write(bulk_ops, ordered=False)
+            logger.info(f"💾 Bulk updated {res_txn.modified_count} transactions")
+
+        if log_records:
+            db["transaction_assignments"].insert_many(log_records, ordered=False)
+            logger.info(f"🪶 Inserted {len(log_records)} auto-assignment logs in one batch")
+
         t_apply = time.perf_counter() - t_apply_start
-        logger.info(f"⚙️ Applied rules to {updated} transactions ({unchanged} unchanged) in {t_apply:.3f}s")
+        logger.info(
+            f"⚙️ Applied rules to {updated} transactions ({unchanged} unchanged) in {t_apply:.3f}s"
+        )
 
         # ---------------------------------------------------------------
         # 6️⃣ Summary
@@ -166,6 +169,10 @@ def apply_all_rules() -> dict:
         logger.exception(f"❌ Auto-assignment failed: {e}")
         return {"success": False, "message": str(e)}
 
+
+# ----------------------------------------------------------------------
+# RULE MATCH LOGIC
+# ----------------------------------------------------------------------
 
 def find_best_assignment(txn: dict, rules: list) -> str | None:
     """Return the assignment from the highest-priority rule matching a transaction."""
@@ -218,8 +225,6 @@ def find_best_assignment(txn: dict, rules: list) -> str | None:
 
 
 if __name__ == "__main__":
-    import logging
-
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     summary = apply_all_rules()
     logger.info("Summary: %s", summary)
