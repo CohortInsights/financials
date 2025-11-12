@@ -1,5 +1,3 @@
-// templates/transactions.js
-
 // --- Global variable for DataTable reference ---
 var transactionTable = null;
 
@@ -123,9 +121,35 @@ function attachYearCheckboxListeners() {
     checkboxes.forEach(cb => cb.addEventListener('change', loadTransactions));
 }
 
+// --- 🔁 Detect when Transactions tab becomes active and refresh if rules changed ---
+function attachTabRefreshListener() {
+  // Works for both <a> and <button> tab toggles
+  const allTabToggles = document.querySelectorAll('[data-bs-toggle="tab"]');
+
+  allTabToggles.forEach(tab => {
+    tab.addEventListener('shown.bs.tab', event => {
+      const targetId = event.target.getAttribute('data-bs-target');
+      if (targetId === '#tab-transactions' && localStorage.getItem('transactionsNeedRefresh') === 'true') {
+        console.log('🔁 Reloading transactions after rule changes...');
+        loadTransactions();
+        localStorage.removeItem('transactionsNeedRefresh');
+      }
+    });
+  });
+
+  // Handle the edge case where Transactions is already active on load
+  const activePane = document.querySelector('#tab-transactions.active');
+  if (activePane && localStorage.getItem('transactionsNeedRefresh') === 'true') {
+    console.log('🔁 Reloading transactions after rule changes (active on load)...');
+    loadTransactions();
+    localStorage.removeItem('transactionsNeedRefresh');
+  }
+}
+
 // --- Module entry point called from code.js ---
 function initTransactions() {
     console.log("🚀 Initializing transaction dashboard");
     attachYearCheckboxListeners();
+    attachTabRefreshListener();   // 🔁 new listener added
     loadTransactions();
 }

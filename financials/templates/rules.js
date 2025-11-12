@@ -49,7 +49,7 @@ function loadRulesTable() {
             orderable: false
           }
         ],
-        order: [[1, "asc"]], // still sort by priority
+        order: [[1, "asc"]],
         scrollY: "60vh",
         scrollCollapse: true,
         paging: true,
@@ -65,7 +65,7 @@ function loadRulesTable() {
 
 // === Open modal for adding new rule ===
 function openAddRuleModal() {
-  editingRuleId = null;  // reset editing state
+  editingRuleId = null;
   document.getElementById("addRuleForm").reset();
   document.getElementById("addRuleLabel").textContent = "Add New Rule";
   const modal = new bootstrap.Modal(document.getElementById("addRuleModal"));
@@ -87,7 +87,6 @@ function onEditRule() {
   form.max_amount.value = rowData.max_amount;
   form.assignment.value = rowData.assignment;
 
-  // Update modal label and show
   document.getElementById("addRuleLabel").textContent = "Edit Rule";
   const modal = new bootstrap.Modal(document.getElementById("addRuleModal"));
   modal.show();
@@ -99,8 +98,8 @@ function saveRule() {
   const form = document.getElementById("addRuleForm");
   const data = Object.fromEntries(new FormData(form).entries());
   data.priority = parseInt(data.priority);
-  data.min_amount = parseFloat(data.min_amount || 0);
-  data.max_amount = parseFloat(data.max_amount || 0);
+  data.min_amount = data.min_amount ? parseFloat(data.min_amount) : null;
+  data.max_amount = data.max_amount ? parseFloat(data.max_amount) : null;
 
   const url = editingRuleId ? `/api/rules/${editingRuleId}` : "/api/rules";
   const method = editingRuleId ? "PUT" : "POST";
@@ -116,6 +115,15 @@ function saveRule() {
         bootstrap.Modal.getInstance(document.getElementById("addRuleModal")).hide();
         loadRulesTable();
         console.log(`✅ Rule ${editingRuleId ? "updated" : "added"} successfully.`);
+
+        // 🔁 Mark transactions for refresh when tab is next opened
+        window.localStorage.setItem("transactionsNeedRefresh", "true");
+
+        // Optional: show summary feedback
+        if (resp.summary) {
+          console.log(`🔁 Rules reapplied: ${resp.summary.updated} updated, ${resp.summary.unchanged} unchanged`);
+        }
+
       } else {
         alert("⚠️ Save failed: " + (resp.message || "unknown error"));
       }
@@ -137,6 +145,15 @@ function onDeleteRule() {
       if (resp.success) {
         console.log(`🗑️ Deleted rule ${ruleId}`);
         loadRulesTable();
+
+        // 🔁 Mark transactions for refresh when tab is next opened
+        window.localStorage.setItem("transactionsNeedRefresh", "true");
+
+        // Optional: show summary feedback
+        if (resp.summary) {
+          console.log(`🔁 Rules reapplied: ${resp.summary.updated} updated, ${resp.summary.unchanged} unchanged`);
+        }
+
       } else {
         alert("⚠️ Delete failed: " + (resp.message || "unknown error"));
       }

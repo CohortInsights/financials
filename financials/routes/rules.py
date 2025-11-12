@@ -33,8 +33,8 @@ def add_rule():
         "priority": int(data.get("priority", 0)),
         "source": data.get("source", "").strip(),
         "description": data.get("description", "").strip(),
-        "min_amount": float(data.get("min_amount") or 0),
-        "max_amount": float(data.get("max_amount") or 0),
+        "min_amount": float(data.get("min_amount")) if data.get("min_amount") not in (None, "", "null") else None,
+        "max_amount": float(data.get("max_amount")) if data.get("max_amount") not in (None, "", "null") else None,
         "assignment": data.get("assignment", "").strip(),
     }
 
