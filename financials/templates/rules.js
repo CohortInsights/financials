@@ -28,16 +28,16 @@ function loadRulesTable() {
         return;  // ✅ stop here, don't reinit
       }
 
-      // First-time initialization
+      // --- First-time initialization
       rulesTable = $("#rulesTable").DataTable({
         data,
         columns: [
+          { data: "assignment" },
           { data: "priority" },
           { data: "source" },
           { data: "description" },
           { data: "min_amount" },
           { data: "max_amount" },
-          { data: "assignment" },
           {
             data: null,
             render: () => `
@@ -47,7 +47,7 @@ function loadRulesTable() {
             orderable: false
           }
         ],
-        order: [[0, "asc"]],
+        order: [[1, "asc"]],   // still sort by Priority
         scrollY: "60vh",
         scrollCollapse: true,
         paging: true,
