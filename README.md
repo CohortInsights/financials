@@ -42,6 +42,7 @@ https://github.com/CohortInsights/financials
     │   └── assign_rules.py         # Backend rule engine for automatic assignments
     │
     ├── main_ingest.py              # Standalone ingestion entry point
+    ├── main.py                     # Main entry point that invokes web.py
     │
     ├── tests/                      # Unit tests
     │   └── test_calculator.py      # Tests for normalization logic
