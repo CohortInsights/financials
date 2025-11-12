@@ -1,5 +1,5 @@
-// static/rules.js
 let rulesTable = null;
+let editingRuleId = null;  // tracks whether we're editing an existing rule
 
 document.addEventListener("DOMContentLoaded", () => {
   const tab = document.getElementById("tab-rules");
@@ -16,6 +16,8 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("saveRuleBtn")?.addEventListener("click", saveRule);
 });
 
+
+// === Load all rules and render DataTable ===
 function loadRulesTable() {
   fetch("/api/rules")
     .then(res => res.json())
@@ -25,10 +27,10 @@ function loadRulesTable() {
         table.clear();
         table.rows.add(data);
         table.draw();
-        return;  // ✅ stop here, don't reinit
+        return;
       }
 
-      // --- First-time initialization
+      // First-time initialization
       rulesTable = $("#rulesTable").DataTable({
         data,
         columns: [
@@ -47,22 +49,52 @@ function loadRulesTable() {
             orderable: false
           }
         ],
-        order: [[1, "asc"]],   // still sort by Priority
+        order: [[1, "asc"]], // still sort by priority
         scrollY: "60vh",
         scrollCollapse: true,
         paging: true,
       });
+
+      // Wire up action buttons
+      $("#rulesTable tbody").on("click", ".edit-btn", onEditRule);
+      $("#rulesTable tbody").on("click", ".delete-btn", onDeleteRule);
     })
     .catch(err => console.error("❌ Error loading rules:", err));
 }
 
 
+// === Open modal for adding new rule ===
 function openAddRuleModal() {
+  editingRuleId = null;  // reset editing state
   document.getElementById("addRuleForm").reset();
+  document.getElementById("addRuleLabel").textContent = "Add New Rule";
   const modal = new bootstrap.Modal(document.getElementById("addRuleModal"));
   modal.show();
 }
 
+
+// === Open modal pre-filled for editing existing rule ===
+function onEditRule() {
+  const rowData = rulesTable.row($(this).closest("tr")).data();
+  editingRuleId = rowData._id;
+
+  // Populate form fields
+  const form = document.getElementById("addRuleForm");
+  form.priority.value = rowData.priority;
+  form.source.value = rowData.source;
+  form.description.value = rowData.description;
+  form.min_amount.value = rowData.min_amount;
+  form.max_amount.value = rowData.max_amount;
+  form.assignment.value = rowData.assignment;
+
+  // Update modal label and show
+  document.getElementById("addRuleLabel").textContent = "Edit Rule";
+  const modal = new bootstrap.Modal(document.getElementById("addRuleModal"));
+  modal.show();
+}
+
+
+// === Save rule (create or update) ===
 function saveRule() {
   const form = document.getElementById("addRuleForm");
   const data = Object.fromEntries(new FormData(form).entries());
@@ -70,8 +102,11 @@ function saveRule() {
   data.min_amount = parseFloat(data.min_amount || 0);
   data.max_amount = parseFloat(data.max_amount || 0);
 
-  fetch("/api/rules", {
-    method: "POST",
+  const url = editingRuleId ? `/api/rules/${editingRuleId}` : "/api/rules";
+  const method = editingRuleId ? "PUT" : "POST";
+
+  fetch(url, {
+    method,
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data)
   })
@@ -80,9 +115,31 @@ function saveRule() {
       if (resp.success) {
         bootstrap.Modal.getInstance(document.getElementById("addRuleModal")).hide();
         loadRulesTable();
+        console.log(`✅ Rule ${editingRuleId ? "updated" : "added"} successfully.`);
       } else {
         alert("⚠️ Save failed: " + (resp.message || "unknown error"));
       }
     })
     .catch(err => console.error("❌ Save rule error:", err));
+}
+
+
+// === Delete rule ===
+function onDeleteRule() {
+  const rowData = rulesTable.row($(this).closest("tr")).data();
+  const ruleId = rowData._id;
+
+  if (!confirm(`Delete rule for assignment "${rowData.assignment}"?`)) return;
+
+  fetch(`/api/rules/${ruleId}`, { method: "DELETE" })
+    .then(res => res.json())
+    .then(resp => {
+      if (resp.success) {
+        console.log(`🗑️ Deleted rule ${ruleId}`);
+        loadRulesTable();
+      } else {
+        alert("⚠️ Delete failed: " + (resp.message || "unknown error"));
+      }
+    })
+    .catch(err => console.error("❌ Delete rule error:", err));
 }
