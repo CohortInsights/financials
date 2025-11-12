@@ -14,6 +14,7 @@ Collections involved:
 from datetime import datetime
 from financials import db as db_module
 
+
 # ----------------------------------------------------------------------
 # MANUAL ASSIGNMENT
 # ----------------------------------------------------------------------
@@ -56,6 +57,7 @@ def set_transaction_assignment(transaction_id: str, assignment: str) -> dict:
 
     except Exception as e:
         return {"success": False, "message": str(e)}
+
 
 # ----------------------------------------------------------------------
 # AUTOMATIC ASSIGNMENT (Future Implementation Placeholder)

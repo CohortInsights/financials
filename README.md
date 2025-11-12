@@ -13,25 +13,43 @@ https://github.com/CohortInsights/financials
 
     financials/
     ├── financials/
-    │   ├── __init__.py         # Package initializer
-    │   ├── calculator.py       # Normalizes CSVs and persists data to MongoDB
-    │   ├── drive.py            # Handles Google Drive API access
-    │   ├── web.py              # Flask routes and dashboard API
-    │   ├── db.py               # MongoDB connection utilities
-    │   ├── templates/          # HTML/CSS/JS for dashboard UI
-    │   │   ├── dashboard.html  # DataTable dashboard
-    │   │   ├── code.js         # Client-side fetch + DataTable behavior
-    │   │   └── styles.css      # UI styling for dashboard
-    │   └── scripts/
-    │       └── delete_entries.py   # Utility to delete all docs for a given source
-    │       └── update_indexes.py   # Utility to update all indexes in Mongo. Can be run many times.
-    ├── main_ingest.py          # Standalone ingestion entry point
-    ├── tests/
-    │   └── test_calculator.py  # Unit tests for normalization logic
-    ├── pyproject.toml          # Poetry dependencies and config
-    ├── README.md               # Project documentation
-    ├── .env                    # Environment (credentials, URIs)
-    └── .gitignore              # Ignores secrets and build junk
+    │   ├── __init__.py             # Package initializer
+    │   ├── calculator.py           # Normalizes CSVs and persists data to MongoDB
+    │   ├── drive.py                # Handles Google Drive API access
+    │   ├── web.py                  # Flask app entry point and route registration
+    │   ├── db.py                   # MongoDB connection utilities
+    │   │
+    │   ├── routes/                 # Modular Flask route definitions
+    │   │   ├── __init__.py         # Enables route package imports
+    │   │   ├── dashboard.py        # /dashboard route → renders HTML dashboard
+    │   │   ├── api_transactions.py # /api/transactions route → serves JSON data
+    │   │   └── assign.py           # /assign_transaction route → manual assignments
+    │   │
+    │   ├── utils/                  # Shared backend helper modules
+    │   │   ├── __init__.py         # Enables utils package imports
+    │   │   └── services.py         # Provides get_drive_service(), get_calculator(), set_cache_dir()
+    │   │
+    │   ├── templates/              # HTML/CSS/JS for dashboard UI
+    │   │   ├── dashboard.html      # DataTable dashboard UI
+    │   │   ├── code.js             # Base DataTable + client-side behavior
+    │   │   ├── transactions.js     # Handles transactions table + assignment actions
+    │   │   └── styles.css          # UI styling for dashboard
+    │   │
+    │   ├── scripts/                # Maintenance and administrative utilities
+    │   │   ├── delete_entries.py   # Deletes all docs for a given source
+    │   │   └── update_indexes.py   # Updates all MongoDB indexes (idempotent)
+    │   │
+    │   └── assign_rules.py         # Backend rule engine for automatic assignments
+    │
+    ├── main_ingest.py              # Standalone ingestion entry point
+    │
+    ├── tests/                      # Unit tests
+    │   └── test_calculator.py      # Tests for normalization logic
+    │
+    ├── pyproject.toml              # Poetry dependencies and configuration
+    ├── README.md                   # Project documentation
+    ├── .env                        # Environment variables (credentials, URIs)
+    └── .gitignore                  # Ignores secrets and build junk
 
 ---
 
@@ -194,13 +212,15 @@ The `/api/transactions` route serves JSON data directly from MongoDB with option
 - ✅ Multi-year imports to MongoDB  
 - ✅ Add Schwab and Checks account normalizers  
 - ✅ BMO transactions enriched with check assignments  
-- [ ] Auto and manual categorization for non-check transactions (see Assignment of Transactions)
+- ✅ Manual categorization for transactions
+- [ ] Auto categorization for transactions (see Assignment of Transactions)
 
 ### Assignment of Transactions
 - Transactions from all sources have an "Assignment" field in the form a.b.c (e.g. Expense, Expense.Food.Groceries, Income.WRS.Roger)
 - An assigment can be made manually from the UI or automatically from "rules"
-- Rules contain fields of ID, Category, Priority, Description, Min_Amount, Max_Amount
+- Rules contain fields of ID, Category, Priority, Source, Description, Min_Amount, Max_Amount
 - Rules are added/updated from the UI and stored in a Mongo Collection
+- THe Source field of Rues is an implied filter that applies "equals" logic to each source of each transaction. [a,b means "a and b"] [a|b means "a or b"]
 - The Description field of Rules is an implied filter that applies "contains" logic to each description of each transaction. [a,b means "a and b"] [a|b means "a or b"]
 - The values of Min_Amount, Max_Amount apply <=, >=, or between filters to each amount field of each transaction
 - If a transaction matches two or more rules, the rule with the highest priority takes precedencce
