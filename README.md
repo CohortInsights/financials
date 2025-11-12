@@ -24,6 +24,7 @@ https://github.com/CohortInsights/financials
     │   │   └── styles.css      # UI styling for dashboard
     │   └── scripts/
     │       └── delete_entries.py   # Utility to delete all docs for a given source
+    │       └── update_indexes.py   # Utility to update all indexes in Mongo. Can be run many times.
     ├── main_ingest.py          # Standalone ingestion entry point
     ├── tests/
     │   └── test_calculator.py  # Unit tests for normalization logic
