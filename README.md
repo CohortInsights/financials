@@ -10,39 +10,40 @@ https://github.com/CohortInsights/financials
 ---
 
 ## 📂 Project Structure
-
     financials/
     ├── financials/
     │   ├── __init__.py             # Package initializer
     │   ├── calculator.py           # Normalizes CSVs and persists data to MongoDB
     │   ├── drive.py                # Handles Google Drive API access
-    │   ├── web.py                  # Flask app entry point and route registration
+    │   ├── web.py                  # Flask app entry point (routes import app directly; no Blueprints)
     │   ├── db.py                   # MongoDB connection utilities
     │   │
-    │   ├── routes/                 # Modular Flask route definitions
+    │   ├── routes/                 # Flask route modules (attach directly to app)
     │   │   ├── __init__.py         # Enables route package imports
-    │   │   ├── dashboard.py        # /dashboard route → renders HTML dashboard
-    │   │   ├── api_transactions.py # /api/transactions route → serves JSON data
-    │   │   └── assign.py           # /assign_transaction route → manual assignments
+    │   │   ├── dashboard.py        # /dashboard → renders HTML dashboard
+    │   │   ├── api_transactions.py # /api/transactions → serves normalized transaction JSON
+    │   │   ├── assign.py           # /assign_transaction → manual assignments
+    │   │   └── rules.py            # /api/rules → CRUD endpoints for assignment rules (Mongo)
     │   │
     │   ├── utils/                  # Shared backend helper modules
     │   │   ├── __init__.py         # Enables utils package imports
     │   │   └── services.py         # Provides get_drive_service(), get_calculator(), set_cache_dir()
     │   │
-    │   ├── templates/              # HTML/CSS/JS for dashboard UI
-    │   │   ├── dashboard.html      # DataTable dashboard UI
+    │   ├── templates/              # HTML/CSS/JS for dashboard UI (served directly)
+    │   │   ├── dashboard.html      # Main dashboard (Transactions + Rules tabs, Add Rule modal)
     │   │   ├── code.js             # Base DataTable + client-side behavior
-    │   │   ├── transactions.js     # Handles transactions table + assignment actions
-    │   │   └── styles.css          # UI styling for dashboard
+    │   │   ├── transactions.js     # Transactions tab interactions and assignment actions
+    │   │   ├── rules.js            # Rules tab (modal open/save, table init/refresh)
+    │   │   └── styles.css          # UI styling (incl. modal size/scroll tweaks)
     │   │
     │   ├── scripts/                # Maintenance and administrative utilities
     │   │   ├── delete_entries.py   # Deletes all docs for a given source
     │   │   └── update_indexes.py   # Updates all MongoDB indexes (idempotent)
     │   │
-    │   └── assign_rules.py         # Backend rule engine for automatic assignments
+    │   └── assign_rules.py         # Backend rule engine for automatic transaction categorization
     │
-    ├── main_ingest.py              # Standalone ingestion entry point
-    ├── main.py                     # Main entry point that invokes web.py
+    ├── main_ingest.py              # Standalone ingestion entry point (CLI)
+    ├── main.py                     # Entry point that invokes web.py
     │
     ├── tests/                      # Unit tests
     │   └── test_calculator.py      # Tests for normalization logic
@@ -214,6 +215,7 @@ The `/api/transactions` route serves JSON data directly from MongoDB with option
 - ✅ Add Schwab and Checks account normalizers  
 - ✅ BMO transactions enriched with check assignments  
 - ✅ Manual categorization for transactions
+- ✅ UI for addition of rules
 - [ ] Auto categorization for transactions (see Assignment of Transactions)
 
 ### Assignment of Transactions
