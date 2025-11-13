@@ -57,6 +57,7 @@ https://github.com/CohortInsights/financials
 - transactions : Stores all financial transactions (id, date, source, description, amount, type)
 - assignment_rules: Stores the rules that control automated assignments to transactions (id, assignment, priority, source, description, min_amount, max_amount)
 - transaction_assignments : Tracks all automated and manual assignments of transactions (id, assignment, type, timestamp)
+- rule_matches : Tracks pairing of a rule with the id of all transactions it matches (metadata to speed up performance of other operations)
 
 ---
 

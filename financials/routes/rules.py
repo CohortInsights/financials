@@ -7,6 +7,32 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
+def parse_amount(value):
+    """
+    Convert incoming JSON value for min_amount/max_amount into a float or None.
+
+    Rules:
+    - None, "", "null" (case-insensitive) -> None
+    - numeric strings / numbers -> float(...)
+    - anything else -> None
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        v = value.strip()
+        if v == "" or v.lower() == "null":
+            return None
+        try:
+            return float(v)
+        except ValueError:
+            return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 # ----------------------------------------------------------------------
 # READ ALL RULES
 # ----------------------------------------------------------------------
@@ -33,8 +59,8 @@ def add_rule():
         "priority": int(data.get("priority", 0)),
         "source": data.get("source", "").strip(),
         "description": data.get("description", "").strip(),
-        "min_amount": float(data.get("min_amount")) if data.get("min_amount") not in (None, "", "null") else None,
-        "max_amount": float(data.get("max_amount")) if data.get("max_amount") not in (None, "", "null") else None,
+        "min_amount": parse_amount(data.get("min_amount")),
+        "max_amount": parse_amount(data.get("max_amount")),
         "assignment": data.get("assignment", "").strip(),
     }
 
@@ -69,8 +95,8 @@ def update_rule(rule_id: str):
         "priority": int(data.get("priority", 0)),
         "source": data.get("source", "").strip(),
         "description": data.get("description", "").strip(),
-        "min_amount": float(data.get("min_amount") or 0),
-        "max_amount": float(data.get("max_amount") or 0),
+        "min_amount": parse_amount(data.get("min_amount")),
+        "max_amount": parse_amount(data.get("max_amount")),
         "assignment": data.get("assignment", "").strip(),
     }
 
@@ -92,20 +118,40 @@ def update_rule(rule_id: str):
 # ----------------------------------------------------------------------
 # DELETE RULE
 # ----------------------------------------------------------------------
+from financials.assign_rules import delete_rule_incremental
+
 @app.route("/api/rules/<string:rule_id>", methods=["DELETE"])
 def delete_rule(rule_id: str):
-    """Delete a rule by its Mongo _id, then reapply all rules."""
+    """
+    Delete a rule by its Mongo _id and incrementally reapply only
+    the affected assignments using delete_rule_incremental(rule_id).
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
     collection = db_module.db["assignment_rules"]
+
     try:
-        result = collection.delete_one({"_id": ObjectId(rule_id)})
-        success = result.deleted_count > 0
+        # ---------------------------------------------------------------
+        # 1️⃣ Delete the rule itself (this must happen first)
+        # ---------------------------------------------------------------
+        delete_result = collection.delete_one({"_id": ObjectId(rule_id)})
+
+        if delete_result.deleted_count == 0:
+            logger.warning("⚠️ Tried to delete missing rule %s", rule_id)
+            return jsonify({"success": False, "message": "Rule not found"}), 404
+
         logger.info("🗑️ Deleted rule %s", rule_id)
 
-        # ✅ Immediately reapply all rules synchronously
-        summary = apply_all_rules()
-        logger.info("🔁 Rules reapplied after deletion: %s", summary)
+        # ---------------------------------------------------------------
+        # 2️⃣ Now perform incremental cleanup + reassignment
+        # ---------------------------------------------------------------
+        result = delete_rule_incremental(rule_id)
 
-        return jsonify({"success": success, "summary": summary})
+        logger.info("🔁 Rules reapplied after deletion: %s", result)
+
+        return jsonify(result)
+
     except Exception as exc:
-        logger.exception("❌ Error deleting rule %s", rule_id)
-        return jsonify({"success": False, "message": str(exc)}), 400
+        logger.exception("❌ Rule deletion failed: %s", exc)
+        return jsonify({"success": False, "message": str(exc)}), 500
