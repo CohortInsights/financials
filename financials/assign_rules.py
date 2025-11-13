@@ -11,12 +11,165 @@ Collections involved:
 """
 
 import logging
-import pymongo
+import time
+from financials import db as db_module
 from datetime import datetime
 from pymongo import UpdateOne
-from financials import db as db_module
 
 logger = logging.getLogger(__name__)
+
+
+def assign_transactions_from_matches_bulk(txn_ids):
+    """
+    Given a list/set of auto-eligible transaction IDs, recompute their winning
+    assignments based solely on the current state of rule_matches.
+
+    This function performs all Mongo operations in bulk for speed:
+      - Bulk aggregation to compute winners
+      - Bulk deletion of old auto logs
+      - Bulk insertion of new auto logs
+      - Bulk updates of the transactions collection
+
+    Returns:
+        {
+            "success": True,
+            "count": <total txns processed>,
+            "updated": <number assigned a rule>,
+            "unspecified": <number assigned 'Unspecified'>,
+            "winners": [
+                {
+                    "txn_id": str,
+                    "rule_id": str,
+                    "priority": int,
+                    "assignment": str
+                },
+                ...
+            ]
+        }
+    """
+    t0 = time.perf_counter()
+
+    # Normalize txn_ids to list
+    if not txn_ids:
+        return {
+            "success": True,
+            "count": 0,
+            "updated": 0,
+            "unspecified": 0,
+            "winners": [],
+        }
+
+    if not isinstance(txn_ids, (list, tuple, set)):
+        txn_ids = [txn_ids]
+    txn_ids = list(txn_ids)
+
+    db = db_module.db
+    rm = db["rule_matches"]
+    assignments_coll = db["transaction_assignments"]
+    tx_coll = db["transactions"]
+
+    try:
+        # ------------------------------------------------------------------
+        # 1️⃣ Find winners using one aggregation
+        # ------------------------------------------------------------------
+
+        pipeline = [
+            {"$match": {"txn_id": {"$in": txn_ids}}},
+            {"$sort": {"txn_id": 1, "priority": -1}},
+            {"$group": {
+                "_id": "$txn_id",
+                "rule_id": {"$first": "$rule_id"},
+                "priority": {"$first": "$priority"},
+                "assignment": {"$first": "$assignment"}
+            }},
+        ]
+
+        agg_results = list(rm.aggregate(pipeline))
+
+        # Build winner maps
+        winners = {
+            doc["_id"]: doc["assignment"]
+            for doc in agg_results
+        }
+        winner_txn_ids = set(winners.keys())
+        loser_txn_ids = set(txn_ids) - winner_txn_ids
+
+        # Full winner match docs to return
+        winner_matches = [
+            {
+                "txn_id": doc["_id"],
+                "rule_id": doc["rule_id"],
+                "priority": doc["priority"],
+                "assignment": doc["assignment"],
+            }
+            for doc in agg_results
+        ]
+
+        # ------------------------------------------------------------------
+        # 2️⃣ Bulk delete old auto logs
+        # ------------------------------------------------------------------
+
+        assignments_coll.delete_many({
+            "id": {"$in": txn_ids},
+            "type": "auto"
+        })
+
+        # ------------------------------------------------------------------
+        # 3️⃣ Bulk insert new auto logs (only winners)
+        # ------------------------------------------------------------------
+
+        if winner_txn_ids:
+            now = datetime.utcnow()
+            new_auto_logs = [
+                {
+                    "id": tid,
+                    "assignment": winners[tid],
+                    "type": "auto",
+                    "timestamp": now,
+                }
+                for tid in winner_txn_ids
+            ]
+            assignments_coll.insert_many(new_auto_logs)
+
+        # ------------------------------------------------------------------
+        # 4️⃣ Bulk update the transactions table
+        # ------------------------------------------------------------------
+
+        bulk_ops = []
+
+        # Winner updates
+        for tid in winner_txn_ids:
+            bulk_ops.append(
+                UpdateOne({"id": tid},
+                          {"$set": {"assignment": winners[tid]}})
+            )
+
+        # Loser updates (Unspecified)
+        for tid in loser_txn_ids:
+            bulk_ops.append(
+                UpdateOne({"id": tid},
+                          {"$set": {"assignment": "Unspecified"}})
+            )
+
+        if bulk_ops:
+            tx_coll.bulk_write(bulk_ops)
+
+        # ------------------------------------------------------------------
+        # Results summary
+        # ------------------------------------------------------------------
+
+        return {
+            "success": True,
+            "count": len(txn_ids),
+            "updated": len(winner_txn_ids),
+            "unspecified": len(loser_txn_ids),
+            "winners": winner_matches,
+            "elapsed_sec": time.perf_counter() - t0,
+        }
+
+    except Exception as exc:
+        logger.exception("❌ assign_transactions_from_matches_bulk failed: %s", exc)
+        return {"success": False, "message": str(exc)}
 
 
 # ----------------------------------------------------------------------
@@ -243,105 +396,206 @@ def apply_all_rules() -> dict:
 
 
 # ----------------------------------------------------------------------
-# INCREMENTAL DELETE (fix reassignments)
+# INCREMENTAL METHODS
 # ----------------------------------------------------------------------
 
-def delete_rule_incremental(rule_id: str) -> dict:
+def rule_added_incremental(rule_id: str) -> dict:
     """
-    Incrementally clean up after a rule is deleted.
-    Assumes rule was already removed from assignment_rules.
+    Incrementally apply a newly created rule.
+
+    Steps:
+      1. Load rule from assignment_rules.
+      2. Compute CURRENT_MATCHES (evaluate the new rule against all auto-eligible txns).
+      3. Insert CURRENT_MATCHES into rule_matches.
+      4. IMPACTED_TXNS = CURRENT_TXNS
+      5. Recompute assignments for these transactions using the bulk helper.
+    """
+    import time
+    from bson import ObjectId
+
+    t0 = time.perf_counter()
+    db = db_module.db
+    rm = db["rule_matches"]
+
+    try:
+        # 1️⃣ Load rule
+        rule = db["assignment_rules"].find_one({"_id": ObjectId(rule_id)})
+        if not rule:
+            msg = f"Rule {rule_id} not found"
+            logger.error(msg)
+            return {"success": False, "message": msg}
+
+        priority = rule.get("priority", 0)
+        assignment = rule.get("assignment")
+
+        # 2️⃣ Compute CURRENT_MATCHES
+        all_txns = list(db["transactions"].find({}, {"_id": 0}))
+        CURRENT_MATCHES = []
+        for txn in all_txns:
+            if _rule_matches_txn(txn, rule):
+                CURRENT_MATCHES.append({
+                    "rule_id": rule_id,
+                    "txn_id": txn["id"],
+                    "priority": priority,
+                    "assignment": assignment,
+                })
+
+        CURRENT_TXNS = {m["txn_id"] for m in CURRENT_MATCHES}
+
+        # 3️⃣ Insert rule_matches entries
+        if CURRENT_MATCHES:
+            rm.insert_many(CURRENT_MATCHES)
+
+        # 4️⃣ IMPACTED_TXNS
+        IMPACTED_TXNS = CURRENT_TXNS
+
+        # 5️⃣ Re-assign winners
+        result = assign_transactions_from_matches_bulk(IMPACTED_TXNS)
+
+        logger.info(
+            "✨ add_rule_incremental completed: %d matches, %d impacted txns",
+            len(CURRENT_MATCHES), len(IMPACTED_TXNS)
+        )
+
+        return {
+            "success": True,
+            "current_matches": len(CURRENT_MATCHES),
+            "impacted_txns": len(IMPACTED_TXNS),
+            "assign_result": result,
+        }
+
+    except Exception as exc:
+        logger.exception("❌ add_rule_incremental failed: %s", exc)
+        return {"success": False, "message": str(exc)}
+
+
+def rule_deleted_incremental(rule_id: str) -> dict:
+    """
+    Incrementally clean up after a rule is deleted from assignment_rules.
+
+    Steps:
+      1. PREVIOUS_MATCHES = all rule_matches for this rule.
+      2. PREVIOUS_TXNS = unique txn_ids from PREVIOUS_MATCHES.
+      3. Delete all matches for this rule_id from rule_matches.
+      4. IMPACTED_TXNS = PREVIOUS_TXNS.
+      5. Recompute winners for these transactions using bulk helper.
     """
     import time
     t0 = time.perf_counter()
     db = db_module.db
     rm = db["rule_matches"]
 
-    logger.info("🧩 Incremental delete started for rule %s", rule_id)
-
     try:
-        # 1️⃣ Find impacted transactions
-        matches = list(rm.find({"rule_id": rule_id}, {"txn_id": 1, "_id": 0}))
-        txn_ids = [m["txn_id"] for m in matches]
-
-        logger.info("🔍 Found %d affected transactions", len(txn_ids))
-
-        if not txn_ids:
-            rm.delete_many({"rule_id": rule_id})
-            return {"success": True, "updated": 0, "unchanged": 0}
-
-        # 2️⃣ Manual assignments (never touched)
-        manual_ids = {
-            x["id"] for x in db["transaction_assignments"].find(
-                {"type": "manual", "id": {"$in": txn_ids}},
-                {"id": 1}
-            )
-        }
-
-        auto_ids = [tid for tid in txn_ids if tid not in manual_ids]
-
-        # 3️⃣ Clear auto logs + assignments
-        db["transaction_assignments"].delete_many(
-            {"type": "auto", "id": {"$in": auto_ids}}
+        # 1️⃣ PREVIOUS_MATCHES
+        PREVIOUS_MATCHES = list(
+            rm.find({"rule_id": rule_id},
+                    {"_id": 0, "rule_id": 1, "txn_id": 1,
+                     "priority": 1, "assignment": 1})
         )
-        db["transactions"].update_many(
-            {"id": {"$in": auto_ids}},
-            {"$set": {"assignment": "Unspecified"}}
-        )
+        PREVIOUS_TXNS = {m["txn_id"] for m in PREVIOUS_MATCHES}
 
-        # 4️⃣ Remove matches for deleted rule
+        # 2️⃣ Remove all matches for this rule
         rm.delete_many({"rule_id": rule_id})
 
-        # 5️⃣ Reassign using next-highest rules
-        updates = []
-        logs = []
-        new_matches = []
+        # 3️⃣ IMPACTED_TXNS
+        IMPACTED_TXNS = PREVIOUS_TXNS
 
-        for tid in auto_ids:
-            nxt = list(
-                rm.find({"txn_id": tid})
-                .sort("priority", -1)
-                .limit(1)
-            )
+        # 4️⃣ Reassign winners
+        result = assign_transactions_from_matches_bulk(IMPACTED_TXNS)
 
-            if not nxt:
-                continue  # stays Unspecified
+        logger.info(
+            "🗑️ delete_rule_incremental completed: %d previous matches, %d impacted",
+            len(PREVIOUS_MATCHES), len(IMPACTED_TXNS)
+        )
 
-            nr = nxt[0]
-            assignment = nr["assignment"]
-
-            updates.append(
-                UpdateOne({"id": tid}, {"$set": {"assignment": assignment}})
-            )
-
-            logs.append({
-                "id": tid,
-                "assignment": assignment,
-                "type": "auto",
-                "timestamp": datetime.utcnow()
-            })
-
-            new_matches.append({
-                "rule_id": str(nr["rule_id"]),  # ensure string
-                "txn_id": tid,
-                "priority": nr["priority"],
-                "assignment": assignment,
-            })
-
-        if updates:
-            db["transactions"].bulk_write(updates)
-        if logs:
-            db["transaction_assignments"].insert_many(logs)
-        if new_matches:
-            rm.insert_many(new_matches)
-
-        logger.info("⚙️ Incrementally updated %d transactions", len(updates))
-        logger.info("✅ Incremental delete complete in %.3fs",
-                    time.perf_counter() - t0)
-
-        return {"success": True,
-                "updated": len(updates),
-                "unchanged": len(manual_ids)}
+        return {
+            "success": True,
+            "previous_matches": len(PREVIOUS_MATCHES),
+            "impacted_txns": len(IMPACTED_TXNS),
+            "assign_result": result,
+        }
 
     except Exception as exc:
-        logger.exception("❌ Incremental delete failed: %s", exc)
+        logger.exception("❌ delete_rule_incremental failed: %s", exc)
+        return {"success": False, "message": str(exc)}
+
+
+def rule_updated_incremental(rule_id: str) -> dict:
+    """
+    Incrementally re-apply a rule after its fields (priority, source, description,
+    min_amount, max_amount, assignment) have been edited.
+
+    Steps:
+      1. Load edited rule.
+      2. PREVIOUS_MATCHES = rule_matches for this rule.
+      3. CURRENT_MATCHES = recomputed matches for this rule.
+      4. Replace old rows in rule_matches with CURRENT_MATCHES.
+      5. IMPACTED_TXNS = PREVIOUS_TXNS ∪ CURRENT_TXNS.
+      6. Recalculate winners using bulk helper.
+    """
+    import time
+    from bson import ObjectId
+
+    t0 = time.perf_counter()
+    db = db_module.db
+    rm = db["rule_matches"]
+
+    try:
+        # 1️⃣ Load edited rule
+        rule = db["assignment_rules"].find_one({"_id": ObjectId(rule_id)})
+        if not rule:
+            msg = f"Rule {rule_id} not found"
+            logger.error(msg)
+            return {"success": False, "message": msg}
+
+        new_priority = rule.get("priority", 0)
+        new_assignment = rule.get("assignment")
+
+        # 2️⃣ PREVIOUS_MATCHES
+        PREVIOUS_MATCHES = list(
+            rm.find({"rule_id": rule_id},
+                    {"_id": 0, "rule_id": 1, "txn_id": 1,
+                     "priority": 1, "assignment": 1})
+        )
+        PREVIOUS_TXNS = {m["txn_id"] for m in PREVIOUS_MATCHES}
+
+        # 3️⃣ CURRENT_MATCHES
+        all_txns = list(db["transactions"].find({}, {"_id": 0}))
+        CURRENT_MATCHES = []
+        for txn in all_txns:
+            if _rule_matches_txn(txn, rule):
+                CURRENT_MATCHES.append({
+                    "rule_id": rule_id,
+                    "txn_id": txn["id"],
+                    "priority": new_priority,
+                    "assignment": new_assignment
+                })
+        CURRENT_TXNS = {m["txn_id"] for m in CURRENT_MATCHES}
+
+        # 4️⃣ Replace rule_matches entries for this rule
+        rm.delete_many({"rule_id": rule_id})
+        if CURRENT_MATCHES:
+            rm.insert_many(CURRENT_MATCHES)
+
+        # 5️⃣ IMPACTED_TXNS
+        IMPACTED_TXNS = PREVIOUS_TXNS.union(CURRENT_TXNS)
+
+        # 6️⃣ Bulk reassignment
+        result = assign_transactions_from_matches_bulk(IMPACTED_TXNS)
+
+        logger.info(
+            "✏️ edit_rule_incremental completed: %d previous, %d current, %d impacted",
+            len(PREVIOUS_MATCHES), len(CURRENT_MATCHES), len(IMPACTED_TXNS)
+        )
+
+        return {
+            "success": True,
+            "previous_matches": len(PREVIOUS_MATCHES),
+            "current_matches": len(CURRENT_MATCHES),
+            "impacted_txns": len(IMPACTED_TXNS),
+            "assign_result": result,
+        }
+
+    except Exception as exc:
+        logger.exception("❌ edit_rule_incremental failed: %s", exc)
         return {"success": False, "message": str(exc)}

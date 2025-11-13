@@ -1,7 +1,6 @@
 from flask import jsonify, request
 from financials import db as db_module
 from financials.web import app
-from financials.assign_rules import apply_all_rules   # ✅ new import
 from bson import ObjectId
 import logging
 
@@ -51,7 +50,7 @@ def get_rules():
 # ----------------------------------------------------------------------
 @app.route("/api/rules", methods=["POST"])
 def add_rule():
-    """Insert a new rule into MongoDB and reapply all rules."""
+    """Insert a new rule into MongoDB and incrementally apply it."""
     collection = db_module.db["assignment_rules"]
     data = request.get_json() or {}
 
@@ -68,15 +67,16 @@ def add_rule():
         result = collection.insert_one(rule)
         logger.info("🟢 Added rule: %s", rule)
 
-        # ✅ Immediately reapply all rules synchronously
-        summary = apply_all_rules()
-        logger.info("🔁 Rules reapplied after addition: %s", summary)
+        # NEW — incremental create instead of full rebuild
+        from financials.assign_rules import rule_added_incremental
+        incremental = rule_added_incremental(str(result.inserted_id))
 
         return jsonify({
             "success": True,
             "id": str(result.inserted_id),
-            "summary": summary
+            "incremental": incremental
         })
+
     except Exception as exc:
         logger.exception("❌ Error adding rule")
         return jsonify({"success": False, "message": str(exc)}), 400
@@ -87,7 +87,7 @@ def add_rule():
 # ----------------------------------------------------------------------
 @app.route("/api/rules/<string:rule_id>", methods=["PUT"])
 def update_rule(rule_id: str):
-    """Update an existing rule by its Mongo _id, then reapply all rules."""
+    """Update an existing rule by its Mongo _id, then incrementally reapply it."""
     collection = db_module.db["assignment_rules"]
     data = request.get_json() or {}
 
@@ -105,11 +105,12 @@ def update_rule(rule_id: str):
         success = result.modified_count > 0
         logger.info("✏️ Updated rule %s: %s", rule_id, update)
 
-        # ✅ Immediately reapply all rules synchronously
-        summary = apply_all_rules()
-        logger.info("🔁 Rules reapplied after update: %s", summary)
+        # NEW — incremental edit instead of full rebuild
+        from financials.assign_rules import rule_updated_incremental
+        incremental = rule_updated_incremental(rule_id)
 
-        return jsonify({"success": success, "summary": summary})
+        return jsonify({"success": success, "incremental": incremental})
+
     except Exception as exc:
         logger.exception("❌ Error updating rule %s", rule_id)
         return jsonify({"success": False, "message": str(exc)}), 400
@@ -118,7 +119,9 @@ def update_rule(rule_id: str):
 # ----------------------------------------------------------------------
 # DELETE RULE
 # ----------------------------------------------------------------------
-from financials.assign_rules import delete_rule_incremental
+from financials.assign_rules import rule_deleted_incremental
+
+from financials.assign_rules import rule_deleted_incremental
 
 @app.route("/api/rules/<string:rule_id>", methods=["DELETE"])
 def delete_rule(rule_id: str):
@@ -128,13 +131,10 @@ def delete_rule(rule_id: str):
     """
     import logging
     logger = logging.getLogger(__name__)
-
     collection = db_module.db["assignment_rules"]
 
     try:
-        # ---------------------------------------------------------------
-        # 1️⃣ Delete the rule itself (this must happen first)
-        # ---------------------------------------------------------------
+        # 1️⃣ Delete the rule document first
         delete_result = collection.delete_one({"_id": ObjectId(rule_id)})
 
         if delete_result.deleted_count == 0:
@@ -143,10 +143,8 @@ def delete_rule(rule_id: str):
 
         logger.info("🗑️ Deleted rule %s", rule_id)
 
-        # ---------------------------------------------------------------
-        # 2️⃣ Now perform incremental cleanup + reassignment
-        # ---------------------------------------------------------------
-        result = delete_rule_incremental(rule_id)
+        # 2️⃣ Apply incremental cleanup and reassignment
+        result = rule_deleted_incremental(rule_id)
 
         logger.info("🔁 Rules reapplied after deletion: %s", result)
 

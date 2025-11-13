@@ -53,11 +53,12 @@ https://github.com/CohortInsights/financials
     ├── .env                        # Environment variables (credentials, URIs)
     └── .gitignore                  # Ignores secrets and build junk
 
+
 ### Mongo Collections
-- transactions : Stores all financial transactions (id, date, source, description, amount, type)
-- assignment_rules: Stores the rules that control automated assignments to transactions (id, assignment, priority, source, description, min_amount, max_amount)
-- transaction_assignments : Tracks all automated and manual assignments of transactions (id, assignment, type, timestamp)
-- rule_matches : Tracks pairing of a rule with the id of all transactions it matches (metadata to speed up performance of other operations)
+- transactions : Stores all normalized financial transactions (id, date, source, description, amount, type, assignment). The assignment field always reflects the current winning assignment (manual or automatic)
+- assignment_rules : Stores all automatic categorization rules (id, assignment, priority, source, description, min_amount, max_amount). These define the matching logic but do not store which transactions they match
+- transaction_assignments : Tracks all assignment applications (id, assignment, type, timestamp). Includes both manual and auto entries. Manual assignments always take precedence
+- rule_matches : Materialized table of all rule-to-transaction matches (rule_id, txn_id, priority, assignment). Used to compute winners efficiently and to support incremental rule updates without re-evaluating all rules
 
 ---
 
@@ -197,22 +198,23 @@ The `/api/transactions` route serves JSON data directly from MongoDB with option
 - ✅ BMO transactions enriched with check assignments  
 - ✅ Manual categorization for transactions
 - ✅ UI for addition of rules
-- [ ] Auto categorization for transactions (see Assignment of Transactions section)
+- ✅ Auto categorization for transactions (see Assignment of Transactions section)
 
 ### Assignment of Transactions
 - Transactions from all sources have an "Assignment" field in the form a.b.c (e.g. Expense, Expense.Food.Groceries, Income.WRS.Roger)
-- An assigment can be made manually from the transactions table
-- Automated assignments are controlled by "rules" stored in the the assignment_rules collection
-- Rules contain fields of ID, Priority, Source, Description, Min_Amount, Max_Amount
-- Rules are added/updated from a table (CRUD) on the Rules tab and stored in the assignment_rules collection
-- THe Source field of Rules is an implied filter that applies "equals" logic to each source of each transaction. [a means "source equals a"] [ a,b means source equals (a or b) ]
-- The Description field of Rules is an implied filter that applies "contains" logic to each description of each transaction. [a,b means "desccription contains (a and b)"] [a|b means "description contains (a or b)"]
-- The values of Min_Amount, Max_Amount apply <=, >=, or between filters to each amount field of each transaction
-- If a transaction matches two or more rules, the rule with the highest priority takes precedence
-- If a transaction matches two or more rules with the same priority, a warning is logged and the latest rule entry is applied
-- When a transaction is matched to a rule, the value of the rule "Assignment" is used to set the corresponding "Assignment" field of the transaction and an entry is made in transaction_assignments table
-- A standalone script named assign_rules.py applies all existing rules in the Mongo collection to all existing transactions. Transactions with manual assignments are excluded from auto assignment
-- The fields of "transaction_assignments" are Transaction_ID, Type (auto | manual)
+- An assignment can be made manually from the transactions table
+- Automated assignments are controlled by rules stored in the assignment_rules collection
+- Rules contain fields of id, assignment, priority, source, description, min_amount, max_amount
+- Rules are added, updated, and deleted from the Rules tab (CRUD) and stored in the assignment_rules collection
+- The Source field of a rule applies "equals" logic to the source of each transaction (a means "source equals a"; a,b means "source equals (a or b)")
+- The Description field applies substring-based logic (a,b means "description contains a and b"; a|b means "description contains a or description contains b")
+- The values of min_amount and max_amount apply numeric filters to each transaction amount
+- If a transaction matches multiple rules, the rule with the highest priority takes precedence
+- If a transaction matches multiple rules with the same priority, the most recently created rule is applied
+- When a rule matches a transaction, the rule's assignment is used to set the transaction's assignment, and a corresponding auto entry is added to the transaction_assignments table
+- Manual assignments override all rules and are never replaced by automatic logic
+- A materialized table named rule_matches stores all rule-to-transaction matches and is used to compute the highest priority match for each transaction
+- The fields of transaction_assignments are transaction_id, assignment, type (auto or manual), and timestamp
 
 ### DevOps
 - [ ] Add GitHub Actions for automated testing
