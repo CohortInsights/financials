@@ -1,7 +1,8 @@
-# drive.py
 import pickle
 import os
 import io
+import time
+import random
 
 from googleapiclient.discovery import build
 from google.auth.transport.requests import Request
@@ -17,10 +18,34 @@ except Exception:  # fallback if package version differs
         pass
 
 
+# ----------------------------------------------------------------------------
+# UNIVERSAL RETRY HELPER
+# ----------------------------------------------------------------------------
+
+def _retry_api_call(callable_fn, *args, **kwargs):
+    """
+    Retry Google API calls on transient errors.
+    Applies exponential backoff for HTTP 500/502/503/504.
+    """
+    max_attempts = 5
+    for attempt in range(max_attempts):
+        try:
+            return callable_fn(*args, **kwargs)
+        except HttpError as e:
+            code = e.resp.status if hasattr(e, "resp") else None
+            if code in (500, 502, 503, 504):
+                sleep = (2 ** attempt) + random.uniform(0, 1)
+                time.sleep(sleep)
+                continue
+            raise  # Non-retryable error → propagate
+    raise Exception(f"Google API failed after {max_attempts} attempts")
+
+
+# ----------------------------------------------------------------------------
+# TOKEN / AUTH HELPERS
+# ----------------------------------------------------------------------------
+
 def is_folder_type():
-    """
-    Return query condition for a mime_type matching a folder
-    """
     return "mimeType='application/vnd.google-apps.folder'"
 
 
@@ -33,50 +58,41 @@ def _delete_file_safely(path: str) -> None:
         if os.path.exists(path):
             os.remove(path)
     except OSError:
-        # Non-fatal; if deletion fails we'll just overwrite later
         pass
 
 
 def get_credentials(name, scopes):
-    """
-    Get credentials; if a cached token exists but is invalid/unrefreshable,
-    delete it and run the OAuth flow so the user sees the login dialog.
-    """
+    """Load + refresh OAuth credentials with safe fallback."""
     creds = None
     token_name = _token_filename(name)
 
-    # Try to load cached token
+    # Load existing token
     if os.path.exists(token_name):
         try:
             with open(token_name, 'rb') as token:
                 creds = pickle.load(token)
         except Exception:
-            # Corrupt/old token file -> treat as absent
             _delete_file_safely(token_name)
             creds = None
 
-    # If we don't have valid creds, attempt refresh or re-auth
+    # Auth flow
     def _reauth():
         cred_file = os.path.join('json', f'{name}.json')
         flow = InstalledAppFlow.from_client_secrets_file(cred_file, scopes)
-        # Use an ephemeral port; launches local browser for consent
         fresh = flow.run_local_server(port=0)
-        # Persist the new token
         with open(token_name, 'wb') as token:
             pickle.dump(fresh, token)
         return fresh
 
+    # Refresh or re-auth as needed
     if not creds or not creds.valid:
-        # If expired but refreshable, try refresh; on any failure, reauth
         if creds and getattr(creds, "expired", False) and getattr(creds, "refresh_token", None):
             try:
                 creds.refresh(Request())
             except Exception:
-                # Any refresh error (invalid_grant, revoked, network, etc.) -> reauth
                 _delete_file_safely(token_name)
                 creds = _reauth()
         else:
-            # No creds or not refreshable -> reauth
             _delete_file_safely(token_name)
             creds = _reauth()
 
@@ -84,68 +100,93 @@ def get_credentials(name, scopes):
 
 
 def get_google_drive_service(name):
-    """
-    Gets authenticated object that can be used to query for google drive contents
-    """
     SCOPES = ['https://www.googleapis.com/auth/drive']
     creds = get_credentials(name, SCOPES)
-    service = build('drive', 'v3', credentials=creds)
-    return service
+    return build('drive', 'v3', credentials=creds)
 
+
+# ----------------------------------------------------------------------------
+# GOOGLE DRIVE WRAPPER (WITH RETRIES + ROBUST DECODE)
+# ----------------------------------------------------------------------------
 
 class GoogleDrive:
     def __init__(self, name='credentials', drive=None):
-        """
-        Constructor
-        """
         if drive is None:
             drive = get_google_drive_service(name)
         self.drive = drive
 
+    # -------------------------------------------------------------
+    # Robust decode helper (mirrors FinancialsCalculator)
+    # -------------------------------------------------------------
+    @staticmethod
+    def decode_bytes(raw: bytes) -> str:
+        """Robust, never-failing decoding chain."""
+        try:
+            return raw.decode("utf-8")
+        except UnicodeDecodeError:
+            pass
+        try:
+            return raw.decode("utf-8", errors="replace")
+        except Exception:
+            pass
+        try:
+            return raw.decode("cp1252")
+        except Exception:
+            pass
+        try:
+            return raw.decode("latin-1")
+        except Exception:
+            pass
+        return raw.decode("utf-8", errors="backslashreplace")
+
+    def load_csv_from_drive(self, item):
+        """
+        Downloads & decodes into text (FinancialsCalculator reads DataFrame from string).
+        """
+        raw = self.download(item.get("id"))
+        text = self.decode_bytes(raw)
+        text = text.replace("\ufeff", "").replace("\u200b", "").replace("\xa0", " ")
+        return text
+
+    # -------------------------------------------------------------
+    # Query helpers (all with retry)
+    # -------------------------------------------------------------
+
     def query(self, query, page_size=500):
-        """
-        Perform a query and return the file results (ignores trashed files).
-        """
+        """Perform a Drive query, ignoring trashed files."""
         if "trashed" not in query:
             query = f"({query}) and trashed = false"
 
-        response = self.drive.files().list(
+        request = self.drive.files().list(
             q=query,
             pageSize=page_size,
             spaces='drive',
             fields='nextPageToken, files(id, name, size, mimeType, trashed)'
-        ).execute()
+        )
+
+        # Execute with retry
+        response = _retry_api_call(request.execute)
         return response.get('files')
 
-
     def by_name(self, name):
-        """
-        Perform a query by name
-        """
         query = f"name='{name}'"
         result = self.query(query)
         if len(result) == 1:
-            result = result[0]
+            return result[0]
         return result
 
     def by_id(self, id):
-        """
-        Perform a query by id
-        """
-        drive = self.drive
-        return drive.files().get(fileId=id, fields="id, name, mimeType").execute()
+        request = self.drive.files().get(
+            fileId=id,
+            fields="id, name, mimeType"
+        )
+        return _retry_api_call(request.execute)
 
     def in_dir(self, dir_id, page_size=500):
-        """
-        Perform a query by directory id
-        """
         query = f"'{dir_id}' in parents"
         return self.query(query, page_size=page_size)
 
     def child_folders(self, dir_id):
-        """
-        List child folders of a directory
-        """
         query = (
             f"'{dir_id}' in parents and "
             f"mimeType='application/vnd.google-apps.folder'"
@@ -153,44 +194,50 @@ class GoogleDrive:
         return self.query(query)
 
     def in_dir_with_name(self, dir_id, name):
-        """
-        Query contents by directory id and exact name
-        """
         query = f"'{dir_id}' in parents and name='{name}'"
         return self.query(query)
 
     def walk(self, dir, callback, level=0):
-        """
-        Recursive walk starting with top level directory
-        """
         dir_id = dir.get('id')
         contents = self.in_dir(dir_id)
+
         folder_list = []
         file_list = []
+
         for item in contents:
             mime_type = item.get('mimeType')
             if 'folder' in mime_type:
                 folder_list.append(item)
             else:
                 file_list.append(item)
+
         args = (dir, folder_list, file_list, level)
         flag = callback(args)
-        if flag and len(folder_list) > 0:
+
+        if flag and folder_list:
             for subdir in folder_list:
-                self.walk(dir=subdir, callback=callback, level=(level + 1))
+                self.walk(dir=subdir, callback=callback, level=level + 1)
+
+    # -------------------------------------------------------------
+    # Download with retry
+    # -------------------------------------------------------------
 
     def download(self, file_id):
         """
-        Download into memory a file object
+        Download raw bytes from Drive.
+        Retries *each chunk* on transient errors.
         """
         try:
-            service = self.drive
-            request = service.files().get_media(fileId=file_id)
+            request = self.drive.files().get_media(fileId=file_id)
             file = io.BytesIO()
             downloader = MediaIoBaseDownload(file, request)
+
             done = False
             while not done:
-                status, done = downloader.next_chunk()
+                # Retry each chunk, not the whole download
+                status, done = _retry_api_call(downloader.next_chunk)
+
         except HttpError as error:
             raise Exception(f'Error downloading file: {error}')
+
         return file.getvalue()

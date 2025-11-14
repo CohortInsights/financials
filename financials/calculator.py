@@ -7,7 +7,7 @@ from pymongo.errors import BulkWriteError
 from typing import Dict, List, Optional, Any
 from functools import cached_property
 from logging import Logger
-from io import BytesIO
+from io import BytesIO, StringIO
 import hashlib
 
 import pandas as pd
@@ -19,6 +19,67 @@ class FinancialsCalculator:
 
     def __init__(self, drive: "GoogleDrive"):
         self.drive = drive
+
+    # -------------------------------------------------------
+    # UNIVERSAL BULLETPROOF CSV LOADER  (OPTION A)
+    # -------------------------------------------------------
+
+    def _load_csv(self, raw: bytes) -> pd.DataFrame:
+        """
+        Decode raw bytes from Google Drive using a robust fallback chain,
+        then load into Pandas and normalize column names.
+        """
+
+        def _decode(raw: bytes) -> str:
+            # 1. UTF-8 strict
+            try:
+                return raw.decode("utf-8")
+            except UnicodeDecodeError:
+                pass
+
+            # 2. UTF-8 replace
+            try:
+                return raw.decode("utf-8", errors="replace")
+            except Exception:
+                pass
+
+            # 3. CP1252 (common bank export)
+            try:
+                return raw.decode("cp1252")
+            except Exception:
+                pass
+
+            # 4. Latin-1 (fallback that always works)
+            try:
+                return raw.decode("latin-1")
+            except Exception:
+                pass
+
+            # 5. Last-resort safety
+            return raw.decode("utf-8", errors="backslashreplace")
+
+        text = _decode(raw)
+        df = pd.read_csv(
+            StringIO(text),
+            on_bad_lines="skip",
+            skip_blank_lines=True,
+        )
+
+        # Normalize headers for BOM, whitespace, case, zero-width chars
+        df.columns = (
+            df.columns
+                .astype(str)
+                .str.replace("\ufeff", "", regex=False)
+                .str.replace("\u200b", "", regex=False)
+                .str.strip()
+                .str.replace("\xa0", " ", regex=False)
+        )
+
+        return df
+
+    # -------------------------------------------------------
+    # END UNIVERSAL LOADER
+    # -------------------------------------------------------
 
     def refresh(self) -> None:
         """Invalidate cached data so the next access re-queries Drive."""
@@ -62,12 +123,7 @@ class FinancialsCalculator:
             if name.lower().startswith("checks") and name.lower().endswith(".csv"):
                 try:
                     raw = self.get_document_bytes(item)
-                    df_checks = pd.read_csv(
-                        BytesIO(raw),
-                        on_bad_lines="skip",
-                        encoding="utf-8-sig",
-                        skip_blank_lines=True,
-                    )
+                    df_checks = self._load_csv(raw)
                     check_map = self._normalize_checks(df_checks)
                     if logger:
                         logger.info(f"Loaded {len(check_map)} check entries from {name}")
@@ -85,12 +141,7 @@ class FinancialsCalculator:
             source = name.split("-")[0]
             try:
                 raw = self.get_document_bytes(item)
-                df = pd.read_csv(
-                    BytesIO(raw),
-                    on_bad_lines="skip",
-                    encoding="utf-8-sig",
-                    skip_blank_lines=True,
-                )
+                df = self._load_csv(raw)
                 if logger:
                     logger.info(f"Loaded {len(df)} rows from {name}")
 
@@ -179,7 +230,6 @@ class FinancialsCalculator:
                 logger.info("No records to insert")
             return []
 
-        # transaction IDs appear in the df as df["id"]
         df_ids = [rec["id"] for rec in records]
 
         try:
@@ -207,10 +257,6 @@ class FinancialsCalculator:
     # --------------------------
 
     def _normalize_checks(self, df: pd.DataFrame) -> dict[int, dict[str, str]]:
-        """
-        Convert Checks CSV into mapping {check_number: {'payee': ..., 'assignment': ...}}.
-        Prepends 'Expense.' to all assignments.
-        """
         required = {"Check", "Pay To", "Assignment"}
         if not required.issubset(df.columns):
             raise ValueError(f"Checks CSV must include {required}")
@@ -235,7 +281,6 @@ class FinancialsCalculator:
         source: str,
         check_map: dict[int, dict[str, str]] | None = None
     ) -> pd.DataFrame:
-        """Normalize BMO CSV exports, optionally enriching with check payee names and assignments."""
         out = pd.DataFrame()
         date_col = "POSTED DATE" if "POSTED DATE" in df.columns else df.columns[0]
         out["date"] = pd.to_datetime(df[date_col], errors="coerce").dt.date
@@ -250,9 +295,8 @@ class FinancialsCalculator:
             errors="coerce"
         )
         out["type"] = df["TYPE"] if "TYPE" in df.columns else ""
-        out["assignment"] = ""  # always include assignment field
+        out["assignment"] = ""
 
-        # --- New enrichment using check reference ---
         if check_map:
             ref_candidates = []
             for col in ["TRANSACTION REFERENCE NUMBER", "FI TRANSACTION REFERENCE"]:
@@ -274,15 +318,10 @@ class FinancialsCalculator:
                         enriched_assign.append("")
                 out["description"] = enriched_desc
                 out["assignment"] = enriched_assign
-        # ------------------------------------------------
 
         return out[
             ["date", "source", "description", "amount", "type", "assignment"]
         ]
-
-    # --------------------------
-    # Other Normalizers (unchanged)
-    # --------------------------
 
     def _normalize_schwab(self, raw: pd.DataFrame, source: str) -> pd.DataFrame:
         df = raw.copy()
