@@ -177,20 +177,30 @@ class FinancialsCalculator:
         if not records:
             if logger:
                 logger.info("No records to insert")
-            return 0
+            return []
+
+        # transaction IDs appear in the df as df["id"]
+        df_ids = [rec["id"] for rec in records]
 
         try:
             result = collection.insert_many(records, ordered=False)
-            inserted = len(result.inserted_ids)
+            inserted_count = len(result.inserted_ids)
+            inserted_ids = df_ids[:inserted_count]
+
             if logger:
-                logger.info(f"✅ Inserted {inserted} new docs, 0 duplicates")
-            return inserted
+                logger.info(f"✅ Inserted {inserted_count} new docs, 0 duplicates")
+
+            return inserted_ids
+
         except BulkWriteError as bwe:
-            inserted = bwe.details.get("nInserted", 0)
+            inserted_count = bwe.details.get("nInserted", 0)
+            inserted_ids = df_ids[:inserted_count]
+
             dup_count = len(bwe.details.get("writeErrors", []))
             if logger:
-                logger.warning(f"⚠️ Skipped {dup_count} duplicates, inserted {inserted} new docs")
-            return inserted
+                logger.warning(f"⚠️ Skipped {dup_count} duplicates, inserted {inserted_count} new docs")
+
+            return inserted_ids
 
     # --------------------------
     # Normalizers (new + updated)

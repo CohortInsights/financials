@@ -38,11 +38,12 @@ https://github.com/CohortInsights/financials
     │   │
     │   ├── scripts/                # Maintenance and administrative utilities
     │   │   ├── delete_entries.py   # Deletes all docs for a given source
-    │   │   └── update_indexes.py   # Updates all MongoDB indexes (idempotent)
+    │   │   ├── update_indexes.py   # Updates all MongoDB indexes (idempotent)
+    │   │   └── rebuild_assignments.py # Rebuilds rule_matches + transaction assignments (slow/fast path)
     │   │
     │   └── assign_rules.py         # Backend rule engine for automatic transaction categorization
     │
-    ├── main_ingest.py              # Standalone ingestion entry point (CLI) 
+    ├── main_ingest.py              # Standalone ingestion entry point (CLI)
     ├── main.py                     # Entry point that invokes financials/web.py
     │
     ├── tests/                      # Unit tests

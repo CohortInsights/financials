@@ -172,6 +172,164 @@ def assign_transactions_from_matches_bulk(txn_ids):
         return {"success": False, "message": str(exc)}
 
 
+def clear_assignments() -> dict:
+    """
+    Clear all automatic assignments and rule_matches.
+
+    - Removes all type="auto" entries from transaction_assignments
+    - Resets transactions.assignment="Unspecified" for all ids that had auto assignments
+    - Deletes all rule_matches
+    - Leaves manual assignments untouched
+    - Leaves assignment_rules untouched
+    """
+    import time
+    t0 = time.perf_counter()
+    db = db_module.db
+
+    try:
+        ta = db["transaction_assignments"]
+        tx = db["transactions"]
+        rm = db["rule_matches"]
+
+        # 1️⃣ Get all transaction ids that have ever had auto assignments
+        auto_ids = ta.distinct("id", {"type": "auto"})
+
+        # 2️⃣ Delete all auto assignment logs
+        auto_del = ta.delete_many({"type": "auto"})
+
+        # 3️⃣ Reset assignments for those transactions (bulk update)
+        reset_count = 0
+        if auto_ids:
+            result = tx.update_many(
+                {"id": {"$in": auto_ids}},
+                {"$set": {"assignment": "Unspecified"}}
+            )
+            reset_count = result.modified_count
+
+        # 4️⃣ Clear rule_matches
+        rm_del = rm.delete_many({})
+
+        elapsed = time.perf_counter() - t0
+
+        logger.info(
+            "🧹 clear_assignments v3: auto_logs=%d, reset=%d, rule_matches=%d in %.3fs",
+            auto_del.deleted_count,
+            reset_count,
+            rm_del.deleted_count,
+            elapsed,
+        )
+
+        return {
+            "success": True,
+            "auto_logs_deleted": auto_del.deleted_count,
+            "assignments_reset": reset_count,
+            "rule_matches_cleared": rm_del.deleted_count,
+            "elapsed_sec": elapsed
+        }
+
+    except Exception as exc:
+        logger.exception("❌ clear_assignments failed: %s", exc)
+        return {"success": False, "message": str(exc)}
+
+
+def assign_new_transactions(new_ids: list[str]) -> dict:
+    """
+    Incrementally assign ONLY newly ingested transactions.
+    Uses rule_matches for everything else.
+
+    Steps:
+      - filter manual IDs
+      - compute new rule_matches rows for these IDs
+      - compute winners via aggregation pipeline
+      - assign via assign_transactions_from_matches_bulk()
+    """
+
+    if not new_ids:
+        return {"success": True, "updated": 0}
+
+    db = db_module.db
+    rm = db["rule_matches"]
+    tx = db["transactions"]
+    ta = db["transaction_assignments"]
+
+    # ----------------------------------------------
+    # 1. Filter out manual transactions
+    # ----------------------------------------------
+    manual_ids = set(
+        ta.distinct("id", {"type": "manual", "id": {"$in": new_ids}})
+    )
+    auto_ids = [tid for tid in new_ids if tid not in manual_ids]
+
+    if not auto_ids:
+        return {"success": True, "updated": 0, "unchanged": len(manual_ids)}
+
+    # ----------------------------------------------
+    # 2. Load rules sorted by priority DESC
+    # ----------------------------------------------
+    rules = list(
+        db["assignment_rules"].find().sort("priority", -1)
+    )
+
+    # ----------------------------------------------
+    # 3. Load transactions for these auto_ids
+    # ----------------------------------------------
+    txns = list(
+        tx.find({"id": {"$in": auto_ids}}, {"_id": 0})
+    )
+
+    # ----------------------------------------------
+    # 4. Compute rule_matches rows for ONLY these txns
+    # ----------------------------------------------
+    new_match_rows = []
+    for txn in txns:
+        tid = txn["id"]
+        for rule in rules:
+            if _rule_matches_txn(txn, rule):
+                new_match_rows.append({
+                    "rule_id": str(rule["_id"]),
+                    "txn_id": tid,
+                    "priority": rule.get("priority", 0),
+                    "assignment": rule.get("assignment")
+                })
+
+    if new_match_rows:
+        rm.insert_many(new_match_rows)
+
+    # ----------------------------------------------
+    # 5. Winner selection for ONLY these txn_ids
+    # ----------------------------------------------
+    pipeline = [
+        {"$match": {"txn_id": {"$in": auto_ids}}},
+        {"$sort": {"priority": -1}},
+        {"$group": {
+            "_id": "$txn_id",
+            "rule_id": {"$first": "$rule_id"},
+            "assignment": {"$first": "$assignment"},
+            "priority": {"$first": "$priority"},
+        }},
+        {"$project": {
+            "_id": 0,
+            "txn_id": "$_id",
+            "rule_id": 1,
+            "assignment": 1,
+            "priority": 1
+        }}
+    ]
+
+    winner_rows = list(rm.aggregate(pipeline))
+
+    # ----------------------------------------------
+    # 6. Apply assignments via the shared bulk helper
+    # ----------------------------------------------
+    summary = assign_transactions_from_matches_bulk(auto_ids)
+
+    return {
+        "success": True,
+        **summary,
+        "manual_skipped": len(manual_ids)
+    }
+
+
 # ----------------------------------------------------------------------
 # MANUAL ASSIGNMENT
 # ----------------------------------------------------------------------
@@ -297,98 +455,194 @@ def find_best_assignment(txn: dict, rules: list):
 
 def apply_all_rules() -> dict:
     """
-    Full rebuild: clear auto assignments, reapply all rules,
-    rebuild rule_matches completely.
+    Apply all rules to all transactions.
+
+    Fast path:
+        If rule_matches has content, use MongoDB aggregation to determine
+        the highest-priority winner per txn_id and apply those assignments.
+        Only transactions whose assignment actually changes are updated.
+
+    Slow path:
+        If rule_matches is empty, evaluate all rule × transaction combinations,
+        rebuild rule_matches, then apply winners.
+        Only transactions whose assignment actually changes are updated.
+
+    All bulk updates & auto-log inserts are handled by a shared internal helper.
     """
     import time
     t0 = time.perf_counter()
     db = db_module.db
 
-    logger.info("🔁 Starting rule reapplication: detailed timing enabled")
+    tx = db["transactions"]
+    rm = db["rule_matches"]
+    ar = db["assignment_rules"]
+    ta = db["transaction_assignments"]
+
+    # --------------------------------------------------------------
+    # Internal helper for both fast + slow paths
+    # --------------------------------------------------------------
+    def __apply_winner_rows(winner_rows):
+        """
+        Bulk-apply assignments based on winner_rows, but only for
+        transactions whose assignment actually changes.
+
+        winner_rows must contain dicts of:
+            { "txn_id", "rule_id", "assignment", "priority" }
+        """
+        if not winner_rows:
+            return {"updated": 0, "logged": 0, "skipped": 0}
+
+        # Collect all txn_ids involved
+        txn_ids = [row["txn_id"] for row in winner_rows]
+
+        # Lookup current assignments in one query
+        current_map = {}
+        for doc in tx.find({"id": {"$in": txn_ids}}, {"id": 1, "assignment": 1}):
+            current_map[doc["id"]] = doc.get("assignment")
+
+        # Filter to only those rows where assignment changes
+        filtered_rows = []
+        skipped = 0
+
+        for row in winner_rows:
+            tid = row["txn_id"]
+            desired = row["assignment"]
+            current = current_map.get(tid)
+
+            if current == desired:
+                skipped += 1
+            else:
+                filtered_rows.append(row)
+
+        if not filtered_rows:
+            return {"updated": 0, "logged": 0, "skipped": skipped}
+
+        # Build bulk updates for changed rows only
+        updates = [
+            UpdateOne(
+                {"id": row["txn_id"]},
+                {"$set": {"assignment": row["assignment"]}}
+            )
+            for row in filtered_rows
+        ]
+
+        # Build bulk auto logs only for changed rows
+        timestamp = datetime.utcnow()
+        logs = [
+            {
+                "id": row["txn_id"],
+                "assignment": row["assignment"],
+                "type": "auto",
+                "timestamp": timestamp,
+            }
+            for row in filtered_rows
+        ]
+
+        # Execute bulk writes
+        tx.bulk_write(updates)
+        ta.insert_many(logs)
+
+        return {
+            "updated": len(updates),
+            "logged": len(logs),
+            "skipped": skipped,
+        }
 
     try:
-        # 1️⃣ Load rules
-        t = time.perf_counter()
-        rules = list(db["assignment_rules"].find().sort("priority", -1))
-        logger.info("📋 Loaded %d rules in %.3fs", len(rules), time.perf_counter() - t)
+        # --------------------------------------------------------------
+        # 1️⃣ FAST PATH — rule_matches already populated
+        # --------------------------------------------------------------
+        if rm.estimated_document_count() > 0:
+            logger.info("⚡ apply_all_rules: fast path (rule_matches present)")
 
-        # 2️⃣ Manual assignments
-        t = time.perf_counter()
-        manual_ids = {
-            x["id"] for x in db["transaction_assignments"].find(
-                {"type": "manual"}, {"id": 1})
-        }
-        logger.info("📎 Cached %d manual IDs in %.3fs",
-                    len(manual_ids), time.perf_counter() - t)
+            pipeline = [
+                {"$sort": {"priority": -1}},
+                {"$group": {
+                    "_id": "$txn_id",
+                    "rule_id": {"$first": "$rule_id"},
+                    "assignment": {"$first": "$assignment"},
+                    "priority": {"$first": "$priority"},
+                }},
+                {"$project": {
+                    "_id": 0,
+                    "txn_id": "$_id",
+                    "rule_id": 1,
+                    "assignment": 1,
+                    "priority": 1,
+                }},
+            ]
 
-        # 3️⃣ Clear old auto logs & assignments
-        db["transaction_assignments"].delete_many({"type": "auto"})
-        db["transactions"].update_many(
-            {"id": {"$nin": list(manual_ids)}},
-            {"$set": {"assignment": "Unspecified"}}
-        )
+            winner_rows = list(rm.aggregate(pipeline))
+            apply_result = __apply_winner_rows(winner_rows)
+            elapsed = time.perf_counter() - t0
 
-        # 4️⃣ Load transactions
-        t = time.perf_counter()
-        txns = list(db["transactions"].find({}, {"_id": 0}))
-        logger.info("📦 Loaded %d transactions in %.3fs",
-                    len(txns), time.perf_counter() - t)
+            logger.info(
+                "⚡ Fast path: updated=%d, skipped=%d in %.3fs",
+                apply_result["updated"],
+                apply_result["skipped"],
+                elapsed,
+            )
 
-        # 5️⃣ Apply rules
-        updates = []
-        logs = []
+            return {
+                "path": "fast",
+                "success": True,
+                "updated": apply_result["updated"],
+                "skipped": apply_result["skipped"],
+                "elapsed_sec": elapsed,
+            }
+
+        # --------------------------------------------------------------
+        # 2️⃣ SLOW PATH — rule_matches empty → full rebuild
+        # --------------------------------------------------------------
+        logger.info("🐢 apply_all_rules: slow path (rebuilding rule_matches)")
+
+        rules = list(ar.find({}).sort("priority", -1))
+        txns = list(tx.find({}, {" _id": 0}))
+
         match_rows = []
-        updated = 0
-        unchanged = 0
+        winners = {}  # txn_id → best match
 
         for txn in txns:
             tid = txn["id"]
-
-            if tid in manual_ids:
-                unchanged += 1
-                continue
-
-            assignment, rid, prio = find_best_assignment(txn, rules)
-
-            if assignment:
-                updated += 1
-                updates.append(
-                    UpdateOne({"id": tid}, {"$set": {"assignment": assignment}})
-                )
-                logs.append({
-                    "id": tid,
-                    "assignment": assignment,
-                    "type": "auto",
-                    "timestamp": datetime.utcnow()
-                })
-
-            # Build rule_matches entry for EVERY matching rule
             for rule in rules:
                 if _rule_matches_txn(txn, rule):
-                    match_rows.append({
-                        "rule_id": str(rule["_id"]),  # store as string
+                    row = {
+                        "rule_id": str(rule["_id"]),
                         "txn_id": tid,
                         "priority": rule.get("priority", 0),
                         "assignment": rule.get("assignment"),
-                    })
+                    }
+                    match_rows.append(row)
 
-        if updates:
-            db["transactions"].bulk_write(updates)
-        if logs:
-            db["transaction_assignments"].insert_many(logs)
+                    if tid not in winners or row["priority"] > winners[tid]["priority"]:
+                        winners[tid] = row
 
-        # Replace rule_matches
-        rm = db["rule_matches"]
-        rm.delete_many({})
+        # Insert rule_matches
         if match_rows:
             rm.insert_many(match_rows)
 
-        total = time.perf_counter() - t0
-        logger.info("🔗 Rebuilt rule_matches with %d entries", len(match_rows))
-        logger.info("⚙️ Updated %d transactions (%d unchanged) in %.3fs",
-                    updated, unchanged, total)
+        # Apply winners (using helper with delta-update)
+        winner_rows = list(winners.values())
+        apply_result = __apply_winner_rows(winner_rows)
 
-        return {"success": True, "updated": updated, "unchanged": unchanged}
+        elapsed = time.perf_counter() - t0
+
+        logger.info(
+            "🐢 Slow rebuild: matches=%d, updated=%d, skipped=%d in %.3fs",
+            len(match_rows),
+            apply_result["updated"],
+            apply_result["skipped"],
+            elapsed,
+        )
+
+        return {
+            "path": "slow",
+            "success": True,
+            "updated": apply_result["updated"],
+            "skipped": apply_result["skipped"],
+            "matches": len(match_rows),
+            "elapsed_sec": elapsed,
+        }
 
     except Exception as exc:
         logger.exception("❌ apply_all_rules failed: %s", exc)
