@@ -393,6 +393,8 @@ class FinancialsCalculator:
 
     def _normalize_paypal(self, df: pd.DataFrame, source: str) -> pd.DataFrame:
         out = pd.DataFrame()
+
+        # -------- Date --------
         if "Date" in df.columns:
             out["date"] = pd.to_datetime(df["Date"], errors="coerce").dt.date
         elif 0 in df.columns:
@@ -400,6 +402,7 @@ class FinancialsCalculator:
         else:
             raise ValueError("No date column found in PayPal CSV")
 
+        # -------- Description --------
         if "Name" in df.columns:
             out["description"] = df["Name"].astype(str)
         elif "Description" in df.columns:
@@ -409,25 +412,84 @@ class FinancialsCalculator:
         else:
             raise ValueError("No description column found in PayPal CSV")
 
+        # -------- Status --------
         if "Status" in df.columns:
-            status = df["Status"].astype(str)
+            status = df["Status"].astype(str).str.lower()
         elif 5 in df.columns:
-            status = df.loc[:, 5].astype(str)
+            status = df.loc[:, 5].astype(str).str.lower()
         else:
             raise ValueError("No status column found in PayPal CSV")
 
+        # -------- Raw Amount (Gross) --------
         if "Gross" in df.columns:
-            out["amount"] = pd.to_numeric(df["Gross"], errors="coerce")
+            raw_amount = pd.to_numeric(df["Gross"], errors="coerce")
         elif "Amount" in df.columns:
-            out["amount"] = pd.to_numeric(df["Amount"], errors="coerce")
+            raw_amount = pd.to_numeric(df["Amount"], errors="coerce")
         elif 7 in df.columns:
-            out["amount"] = pd.to_numeric(df.loc[:, 7], errors="coerce")
+            raw_amount = pd.to_numeric(df.loc[:, 7], errors="coerce")
         else:
             raise ValueError("No amount column found in PayPal CSV")
 
+        # -------- Balance Impact (authoritative for sign when present) --------
+        balance_impact = None
+        if "Balance Impact" in df.columns:
+            balance_impact = df["Balance Impact"].astype(str).str.lower()
+        elif (df.columns.astype(str) == "Balance Impact").any():
+            col = df.columns[df.columns.astype(str) == "Balance Impact"][0]
+            balance_impact = df[col].astype(str).str.lower()
+
+        amount = raw_amount.copy()
+
+        if balance_impact is not None:
+            fixed_amount = []
+            for amt, impact in zip(raw_amount, balance_impact):
+                if pd.isna(amt):
+                    fixed_amount.append(np.nan)
+                else:
+                    if "debit" in impact:
+                        fixed_amount.append(-abs(amt))
+                    elif "credit" in impact:
+                        fixed_amount.append(abs(amt))
+                    else:
+                        # Memo or unknown → keep original sign
+                        fixed_amount.append(amt)
+            amount = pd.Series(fixed_amount, index=df.index)
+
+        out["amount"] = amount
+
+        # -------- Drop non-final / noisy transactions --------
+        mask_completed = (status == "completed")
+
+        # Type column (flexible column position fallback)
+        if "Type" in df.columns:
+            type_col = df["Type"].astype(str).str.lower()
+        elif 4 in df.columns:
+            type_col = df.loc[:, 4].astype(str).str.lower()
+        else:
+            type_col = pd.Series("", index=df.index)
+
+        mask_noise = (
+            type_col.str.contains("hold")
+            | type_col.str.contains("authorization")
+            | type_col.str.contains("reversal")
+            | type_col.str.contains("currency conversion")
+        )
+
+        # New: drop Memo balance-impact rows (non-cashflow metadata)
+        if balance_impact is not None:
+            mask_memo = balance_impact.str.contains("memo")
+        else:
+            mask_memo = pd.Series(False, index=df.index)
+
+        final_mask = mask_completed & (~mask_noise) & (~mask_memo)
+        out = out.loc[final_mask].copy()
+
+        # -------- Source --------
         out["source"] = source
+
+        # -------- Type: Credit/Debit --------
         out["type"] = out["amount"].apply(lambda x: "Credit" if x > 0 else "Debit")
-        out = out.loc[status.str.lower() == "completed"]
+
         return out[["date", "source", "description", "amount", "type"]]
 
 
