@@ -209,4 +209,61 @@ table.dataTable tfoot input {
   max-height: 65vh;         /* keep modal from filling entire viewport */
   overflow-y: auto;
 }
+/* Reserve space for pagination controls */
+.dataTables_wrapper .dataTables_paginate {
+    margin-top: 6px !important;
+}
 
+.dataTables_wrapper {
+    padding-bottom: 50px !important;   /* ensures pagination has breathing room */
+}
+
+.dataTables_wrapper .dataTables_scrollBody {
+    max-height: 55vh !important;   /* was 60vh — gives footer + pagination more room */
+    overflow-y: auto !important;
+}
+
+/* --- Compact Transactions Toolbar --- */
+
+/* Reduce spacing above/below the year selector and reload button */
+#tab-transactions .year-selector,
+#reloadButton {
+    margin-bottom: 0.2rem !important;
+}
+
+/* Smaller, tighter year selector box */
+.year-selector {
+    padding: 0.2rem 0.6rem !important;
+    gap: 0.8rem !important;
+    font-size: 14px !important;
+}
+
+/* Shrink reload button */
+.reload-button {
+    padding: 3px 10px !important;
+    font-size: 13px !important;
+    margin-top: 0.2rem !important;
+}
+
+/* Pull DataTables controls upward */
+.dataTables_wrapper .dataTables_length,
+.dataTables_wrapper .dataTables_filter {
+    margin-top: 0.2rem !important;
+    margin-bottom: 0.2rem !important;
+}
+
+/* Reduce top margin under tab bar */
+.tab-content {
+    margin-top: 0.4rem !important;
+}
+
+/* Give pagination room at the bottom */
+.dataTables_wrapper {
+    padding-bottom: 50px !important;
+}
+
+/* Slightly reduce scroll-body height to prevent overlap */
+.dataTables_wrapper .dataTables_scrollBody {
+    max-height: 55vh !important;
+    overflow-y: auto !important;
+}
