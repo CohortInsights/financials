@@ -170,7 +170,7 @@ class FinancialsCalculator:
         if s == "capitolone":
             return self._normalize_capitol_one(df, source)
         if s == "discover":
-            return self._normalize_generic_card(df, source)
+            return self._normalize_discover(df, source)
         if s == "paypal":
             return self._normalize_paypal(df, source)
         if s == "schwab":
@@ -379,16 +379,39 @@ class FinancialsCalculator:
         out["type"] = ["Credit" if c > 0 else "Debit" if d > 0 else "" for c, d in zip(credit, debit)]
         return out[["date", "source", "description", "amount", "type"]]
 
-    def _normalize_generic_card(self, df: pd.DataFrame, source: str) -> pd.DataFrame:
+    def _normalize_discover(self, df: pd.DataFrame, source: str) -> pd.DataFrame:
         out = pd.DataFrame()
         date_col = "Post Date" if "Post Date" in df.columns else df.columns[0]
         out["date"] = pd.to_datetime(df[date_col], errors="coerce").dt.date
         out["source"] = source
         desc_col = "Description" if "Description" in df.columns else df.columns[1]
         out["description"] = df[desc_col].astype(str)
+
         amt_col = "Amount" if "Amount" in df.columns else df.columns[2]
-        out["amount"] = pd.to_numeric(df[amt_col], errors="coerce")
-        out["type"] = df["Category"] if "Category" in df.columns else ""
+        amt = pd.to_numeric(df[amt_col], errors="coerce")
+
+        # --- Discover fix: purchases should be negative ---
+        category_col = df["Category"].astype(str).str.lower() if "Category" in df.columns else pd.Series("",
+                                                                                                         index=df.index)
+
+        credit_markers = ["credit", "refund", "payment"]
+
+        fixed_amount = []
+        for a, cat in zip(amt, category_col):
+            if pd.isna(a):
+                fixed_amount.append(a)
+            else:
+                # Positive amounts are normally purchases → make negative
+                if a > 0 and not any(marker in cat for marker in credit_markers):
+                    fixed_amount.append(-abs(a))
+                else:
+                    fixed_amount.append(abs(a))  # credits remain positive
+
+        out["amount"] = fixed_amount
+
+        # Credit/debit label
+        out["type"] = out["amount"].apply(lambda x: "Credit" if x > 0 else "Debit")
+
         return out[["date", "source", "description", "amount", "type"]]
 
     def _normalize_paypal(self, df: pd.DataFrame, source: str) -> pd.DataFrame:

@@ -63,7 +63,7 @@ def test_generic_card_normalization(calc):
         "Amount": [2.10, 9.59],
         "Category": ["Gasoline", "Restaurants"],
     })
-    df = calc._normalize_generic_card(raw, "Discover")
+    df = calc._normalize_discover(raw, "Discover")
     assert_schema(df)
     assert "Gasoline" in df["type"].values
 

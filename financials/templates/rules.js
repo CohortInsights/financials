@@ -30,7 +30,7 @@ function loadRulesTable() {
         return;
       }
 
-      // First-time initialization
+      // FIRST-TIME INITIALIZATION
       rulesTable = $("#rulesTable").DataTable({
         data,
         columns: [
@@ -50,9 +50,24 @@ function loadRulesTable() {
           }
         ],
         order: [[1, "asc"]],
-        scrollY: "60vh",
+
+        // PATCH 2: Mirror Transactions DataTable behavior
+        scrollY: "55vh",
         scrollCollapse: true,
         paging: true,
+        info: true,
+        orderCellsTop: true,
+        fixedHeader: false
+      });
+
+      // PATCH 3: Hook up footer-search filters
+      rulesTable.columns().every(function () {
+        let column = this;
+        $('input', column.footer()).on('keyup change clear', function () {
+          if (column.search() !== this.value) {
+            column.search(this.value).draw();
+          }
+        });
       });
 
       // Wire up action buttons
@@ -63,6 +78,7 @@ function loadRulesTable() {
 }
 
 
+
 // === Open modal for adding new rule ===
 function openAddRuleModal() {
   editingRuleId = null;
@@ -71,6 +87,7 @@ function openAddRuleModal() {
   const modal = new bootstrap.Modal(document.getElementById("addRuleModal"));
   modal.show();
 }
+
 
 
 // === Open modal pre-filled for editing existing rule ===
@@ -91,6 +108,7 @@ function onEditRule() {
   const modal = new bootstrap.Modal(document.getElementById("addRuleModal"));
   modal.show();
 }
+
 
 
 // === Save rule (create or update) ===
@@ -119,7 +137,6 @@ function saveRule() {
         // 🔁 Mark transactions for refresh when tab is next opened
         window.localStorage.setItem("transactionsNeedRefresh", "true");
 
-        // Optional: show summary feedback
         if (resp.summary) {
           console.log(`🔁 Rules reapplied: ${resp.summary.updated} updated, ${resp.summary.unchanged} unchanged`);
         }
@@ -130,6 +147,7 @@ function saveRule() {
     })
     .catch(err => console.error("❌ Save rule error:", err));
 }
+
 
 
 // === Delete rule ===
@@ -146,10 +164,8 @@ function onDeleteRule() {
         console.log(`🗑️ Deleted rule ${ruleId}`);
         loadRulesTable();
 
-        // 🔁 Mark transactions for refresh when tab is next opened
         window.localStorage.setItem("transactionsNeedRefresh", "true");
 
-        // Optional: show summary feedback
         if (resp.summary) {
           console.log(`🔁 Rules reapplied: ${resp.summary.updated} updated, ${resp.summary.unchanged} unchanged`);
         }
@@ -160,3 +176,17 @@ function onDeleteRule() {
     })
     .catch(err => console.error("❌ Delete rule error:", err));
 }
+
+
+
+// -----------------------------
+// Footer Filter Inputs  (PATCH 1)
+// -----------------------------
+$('#rulesTable tfoot th').each(function () {
+    const title = $(this).text();
+    if (title !== 'Actions') {
+        $(this).html('<input type="text" placeholder="Filter ' + title + '" />');
+    } else {
+        $(this).html('');
+    }
+});
