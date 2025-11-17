@@ -171,6 +171,8 @@ class FinancialsCalculator:
             return self._normalize_capitol_one(df, source)
         if s == "discover":
             return self._normalize_discover(df, source)
+        if s == "grants":
+            return self._normalize_grants(df, source)
         if s == "paypal":
             return self._normalize_paypal(df, source)
         if s == "schwab":
@@ -378,6 +380,57 @@ class FinancialsCalculator:
         out["amount"] = credit - debit
         out["type"] = ["Credit" if c > 0 else "Debit" if d > 0 else "" for c, d in zip(credit, debit)]
         return out[["date", "source", "description", "amount", "type"]]
+
+    def _normalize_grants(self, df: pd.DataFrame, source: str) -> pd.DataFrame:
+        """
+        Normalize company matching-grant CSV.
+        Expected columns:
+          - Requested Date
+          - Charity Name
+          - Amount
+          - Submitted By
+          - Status (ignored except for filtering Approved)
+        """
+
+        # ---- Filter to only "Approved" rows if column exists ----
+        if "Status" in df.columns:
+            mask = df["Status"].astype(str).str.lower() == "approved"
+            df = df.loc[mask].copy()
+
+        out = pd.DataFrame()
+
+        # ---- Date ----
+        if "Requested Date" not in df.columns:
+            raise ValueError("Grants CSV missing 'Requested Date' column.")
+        out["date"] = pd.to_datetime(df["Requested Date"], errors="coerce").dt.date
+
+        # ---- Source ----
+        out["source"] = source
+
+        # ---- Description = Charity Name ----
+        if "Charity Name" not in df.columns:
+            raise ValueError("Grants CSV missing 'Charity Name' column.")
+        out["description"] = df["Charity Name"].astype(str)
+
+        # ---- Amount → convert to negative ----
+        if "Amount" not in df.columns:
+            raise ValueError("Grants CSV missing 'Amount' column.")
+        amounts = (
+            df["Amount"].astype(str)
+            .str.replace("$", "", regex=False)
+            .str.replace(",", "", regex=False)
+        )
+        out["amount"] = -pd.to_numeric(amounts, errors="coerce").abs()
+
+        # ---- Type = Submitted By ----
+        if "Submitted By" not in df.columns:
+            raise ValueError("Grants CSV missing 'Submitted By' column.")
+        out["type"] = df["Submitted By"].astype(str)
+
+        # ---- Assignment blank ----
+        out["assignment"] = ""
+
+        return out[["date", "source", "description", "amount", "type", "assignment"]]
 
     def _normalize_discover(self, df: pd.DataFrame, source: str) -> pd.DataFrame:
         out = pd.DataFrame()
