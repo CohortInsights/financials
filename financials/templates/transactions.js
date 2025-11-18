@@ -1,6 +1,15 @@
 // --- Global variable for DataTable reference ---
 var transactionTable = null;
 
+// --- Debounce utility (150ms) ---
+function debounce(fn, delay = 150) {
+    let timer = null;
+    return function (...args) {
+        clearTimeout(timer);
+        timer = setTimeout(() => fn.apply(this, args), delay);
+    };
+}
+
 // --- Collect selected years from the checkbox group ---
 function getSelectedYears() {
     return Array.from(document.querySelectorAll('#yearSelector input[type=checkbox]:checked'))
@@ -71,9 +80,11 @@ function buildTransactionTable(data) {
 // --- Add footer text filters for each column ---
 function addColumnFilters() {
     const api = this.api();
+
     api.columns().every(function () {
         const column = this;
         const headerText = $(column.header()).text();
+
         const input = document.createElement("input");
         input.placeholder = "Filter " + headerText;
         input.style.width = "90%";
@@ -82,11 +93,45 @@ function addColumnFilters() {
 
         $(column.footer()).empty().append(input);
 
-        $(input).on('keyup change clear', function () {
-            if (column.search() !== this.value) {
-                column.search(this.value, true, false).draw();
-            }
-        });
+        // --- Enhanced filtering logic with debounce ---
+        $(input).on(
+            'keyup change clear',
+            debounce(function () {
+                let raw = this.value.trim();
+
+                if (raw === "") {
+                    column.search("", true, false).draw();
+                    return;
+                }
+
+                // Break apart tokens: includes + excludes
+                let parts = raw.split(",")
+                               .map(s => s.trim())
+                               .filter(s => s !== "");
+
+                let include = parts.filter(p => !p.startsWith("!"));
+                let exclude = parts.filter(p => p.startsWith("!"))
+                                   .map(p => p.substring(1));
+
+                // Build regex pattern
+                let pattern = "";
+
+                // Negative lookahead for all excludes
+                exclude.forEach(ex => {
+                    pattern += `(?!.*${ex})`;
+                });
+
+                // OR-group for inclusion tokens
+                if (include.length > 0) {
+                    pattern += `(${include.join("|")})`;
+                } else if (exclude.length > 0) {
+                    // Only exclusions? Match everything except them
+                    pattern += `.*`;
+                }
+
+                column.search(pattern, true, false).draw();
+            }, 150)
+        );
     });
 }
 
