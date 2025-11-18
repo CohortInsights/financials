@@ -278,28 +278,42 @@ class FinancialsCalculator:
         return mapping
 
     def _normalize_bmo(
-        self,
-        df: pd.DataFrame,
-        source: str,
-        check_map: dict[int, dict[str, str]] | None = None
+            self,
+            df: pd.DataFrame,
+            source: str,
+            check_map: dict[int, dict[str, str]] | None = None
     ) -> pd.DataFrame:
         out = pd.DataFrame()
+
+        # --- Date ---
         date_col = "POSTED DATE" if "POSTED DATE" in df.columns else df.columns[0]
         out["date"] = pd.to_datetime(df[date_col], errors="coerce").dt.date
         out["source"] = source
+
+        # --- Description ---
         out["description"] = (
             df["DESCRIPTION"]
             if "DESCRIPTION" in df.columns
             else df.loc[:, df.columns[1]].astype(str)
         )
+
+        # --- Amount ---
         out["amount"] = pd.to_numeric(
             df["AMOUNT"] if "AMOUNT" in df.columns else df.loc[:, df.columns[2]],
             errors="coerce"
         )
+
+        # --- Type ---
         out["type"] = df["TYPE"] if "TYPE" in df.columns else ""
+
+        # --- Assignment (default empty) ---
         out["assignment"] = ""
 
+        # =====================================================================
+        #  ENRICHMENT USING CHECKS-YEAR.CSV
+        # =====================================================================
         if check_map:
+            # Identify column providing check numbers
             ref_candidates = []
             for col in ["TRANSACTION REFERENCE NUMBER", "FI TRANSACTION REFERENCE"]:
                 if col in df.columns:
@@ -308,6 +322,7 @@ class FinancialsCalculator:
 
             if len(ref_candidates) > 0:
                 ref_nums = pd.to_numeric(ref_candidates, errors="coerce").fillna(0).astype(int)
+
                 enriched_desc = []
                 enriched_assign = []
 
@@ -318,9 +333,33 @@ class FinancialsCalculator:
                     else:
                         enriched_desc.append(desc)
                         enriched_assign.append("")
+
                 out["description"] = enriched_desc
                 out["assignment"] = enriched_assign
 
+                # =================================================================
+                #  NEW FALLBACK RULE:
+                #  If DESCRIPTION == "DDA CHECK", assignment is blank, and we know
+                #  the check number (ref), then append the check number.
+                #  This improves descriptions for checks missing from Checks-YEAR.csv.
+                # =================================================================
+                fallback_desc = []
+                for desc, ref, assign in zip(out["description"], ref_nums, out["assignment"]):
+                    if (
+                            isinstance(desc, str)
+                            and desc.strip().upper() == "DDA CHECK"
+                            and assign == ""
+                            and ref != 0
+                    ):
+                        fallback_desc.append(f"DDA Check {ref}")
+                    else:
+                        fallback_desc.append(desc)
+
+                out["description"] = fallback_desc
+
+        # =====================================================================
+        #  RETURN NORMALIZED COLUMNS
+        # =====================================================================
         return out[
             ["date", "source", "description", "amount", "type", "assignment"]
         ]
