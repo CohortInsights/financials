@@ -1,9 +1,28 @@
-from flask import jsonify, request
+from flask import jsonify, request, Response
 from datetime import datetime
 import pandas as pd
 import numpy as np
 from financials import db as db_module
 from financials.web import app
+
+
+def respond_with_format(df: pd.DataFrame, filename: str):
+    """
+    Return df as JSON or CSV depending on ?format= argument.
+    filename controls the CSV download name.
+    """
+    fmt = request.args.get("format", "json").lower()
+
+    if fmt == "csv":
+        csv_data = df.to_csv(index=False)
+        return Response(
+            csv_data,
+            mimetype="text/csv",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+
+    # JSON response
+    return jsonify(df.to_dict(orient="records"))
 
 
 def compute_transactions(args):
@@ -34,6 +53,7 @@ def compute_transactions(args):
             df["amount"] = df["amount"].fillna(0)
         df = df.replace({np.nan: ""})
     return df
+
 
 def group_by_assignment_time_period(df: pd.DataFrame, args):
     """
@@ -95,11 +115,12 @@ def group_by_assignment_time_period(df: pd.DataFrame, args):
 @app.route("/api/transactions")
 def api_transactions():
     df = compute_transactions(request.args)
-    return jsonify(df.to_dict(orient="records"))
+    return respond_with_format(df, "transactions.csv")
 
 
 @app.route("/api/assigned_transactions")
 def assigned_transactions():
     df = compute_transactions(request.args)
     df = group_by_assignment_time_period(df, request.args)
-    return jsonify(df.to_dict(orient="records"))
+    return respond_with_format(df, "assigned_transactions.csv")
+
