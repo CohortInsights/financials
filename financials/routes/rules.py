@@ -1,8 +1,9 @@
-from flask import jsonify, request
+from flask import jsonify, request, Response
 from financials import db as db_module
 from financials.web import app
 from bson import ObjectId
 import logging
+import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -38,10 +39,26 @@ def parse_amount(value):
 @app.route("/api/rules", methods=["GET"])
 def get_rules():
     """Return all assignment rules."""
+    fmt = request.args.get("format", "json")
     collection = db_module.db["assignment_rules"]
     rules = list(collection.find({}))
+
+    # Convert ObjectId → string
     for rule in rules:
-        rule["_id"] = str(rule["_id"])  # send string id to frontend
+        rule["_id"] = str(rule["_id"])
+
+    if fmt == "csv":
+        df = pd.DataFrame(rules)
+        csv_data = df.to_csv(index=False)
+
+        return Response(
+            csv_data,
+            mimetype="text/csv",
+            headers={
+                "Content-Disposition": "attachment; filename=assignment_rules.csv"
+            }
+        )
+
     return jsonify(rules)
 
 
