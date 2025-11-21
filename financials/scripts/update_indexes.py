@@ -8,6 +8,9 @@ auto-assignment, bulk updates, rule evaluation, and the new
 rule_matches collection for incremental rule updates.
 """
 
+import os
+import csv
+import argparse
 from financials import db as db_module
 
 
@@ -64,5 +67,64 @@ def ensure_indexes():
     print("✅ Index verification complete.")
 
 
+def install_google_type_rules():
+    """
+    Install rules based on financials/cfg/google_types_to_expenses.csv.
+    For each row:
+        priority     = 2
+        source       = ""
+        description  = google_type
+        assignment   = assignment from CSV
+    """
+    db = db_module.db
+    rules = db["assignment_rules"]
+
+    cfg_path = os.path.join(
+        os.path.dirname(__file__), "..", "cfg", "google_types_to_expenses.csv"
+    )
+    cfg_path = os.path.abspath(cfg_path)
+
+    if not os.path.exists(cfg_path):
+        print(f"⚠️ google_types_to_expenses.csv not found: {cfg_path}")
+        return
+
+    print(f"📥 Installing Google-type rules from {cfg_path}...")
+
+    count = 0
+    with open(cfg_path, newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            google_type = row.get("google_type")
+            assignment = row.get("assignment")
+
+            if not google_type:
+                continue
+
+            rules.update_one(
+                {"source": "", "description": google_type},
+                {
+                    "$set": {
+                        "source": "",
+                        "description": google_type,
+                        "assignment": assignment,
+                        "priority": 2,
+                    }
+                },
+                upsert=True,
+            )
+            count += 1
+
+    print(f"✅ Installed/updated {count} Google-type rules.")
+
+
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--rules", action="store_true",
+                        help="Install Google-type assignment rules from CSV")
+
+    args = parser.parse_args()
+
     ensure_indexes()
+
+    if args.rules:
+        install_google_type_rules()
