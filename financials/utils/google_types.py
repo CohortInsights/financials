@@ -16,8 +16,7 @@ logger.setLevel(logging.INFO)
 
 MERCHANT_COLL = "google_merchant_types"
 
-# Approximate blended cost per merchant (search + details) in USD
-# searchText ≈ $2/1000, getPlace ≈ $17/1000 → $19/1000
+# Approximate blended cost per merchant lookup (search + details)
 ESTIMATED_COST_PER_MERCHANT = 19.0 / 1000.0
 
 
@@ -27,23 +26,25 @@ ESTIMATED_COST_PER_MERCHANT = 19.0 / 1000.0
 
 def get_types_for_descriptions(descriptions, live=False, interactive=False):
     """
-    Core method.
+    Resolve Google merchant types for a list of description strings.
 
-    Accepts a list of raw description strings.
-    - Normalizes and deduplicates them.
-    - Ensures merchant index exists.
-    - Loads cached merchant records from google_merchant_types.
-    - If live=False:
-        - Returns only cached types (status == "ok"); never calls Google.
-    - If live=True:
-        - Computes which merchants need lookup (no record or status != "ok").
-        - If interactive=True:
-            - Shows count + estimated cost + sample descriptions.
-            - Prompts user to confirm before calling Google.
-        - Performs Google lookups for missing merchants.
-        - Writes results to merchant collection.
+    Args:
+        descriptions (list[str]):
+            Raw transaction descriptions.
+        live (bool):
+            If False:
+                Only use cached lookup results already stored in MongoDB.
+            If True:
+                Perform live Google Places lookups for merchants that are missing
+                or have no "ok" lookup_status.
+        interactive (bool):
+            If True and live=True:
+                Prompt user with estimated cost before making any paid requests.
+
     Returns:
-        dict[str, list[str]]  # { normalized_description_key: [google_types] }
+        dict[str, list[str]]:
+            Maps normalized description_key → list of filtered Google types.
+            For non-live mode, missing merchants return an empty list.
     """
     if not descriptions:
         return {}
@@ -54,16 +55,15 @@ def get_types_for_descriptions(descriptions, live=False, interactive=False):
 
     type_map_coll = db["google_type_mappings"]
 
-    # 1. Normalize & dedupe descriptions
+    # Normalize & dedupe
     normalized = [_normalize_description(d) for d in descriptions]
     unique_desc = sorted(set(normalized))
 
     logger.info(f"[google_types] Processing {len(unique_desc)} unique descriptions")
 
-    # 2. Load valid types for filtering
     valid_types = set(type_map_coll.distinct("google_type"))
 
-    # 3. Load cached merchant records
+    # Load cached merchant records
     cached_records = {
         record["description_key"]: record
         for record in merchant.find(
@@ -77,8 +77,6 @@ def get_types_for_descriptions(descriptions, live=False, interactive=False):
 
     for desc in unique_desc:
         record = cached_records.get(desc)
-
-        # We consider a record "cached" only if lookup_status == "ok"
         if record and record.get("google_lookup_status") == "ok":
             results[desc] = record.get("google_types", [])
         else:
@@ -88,23 +86,18 @@ def get_types_for_descriptions(descriptions, live=False, interactive=False):
         f"[google_types] Cached={len(results)}, Needs lookup={len(needs_lookup)}"
     )
 
-    # -----------------------------------------------------------------------
-    # DRY RUN / NON-LIVE MODE: no Google API calls, no DB writes
-    # -----------------------------------------------------------------------
+    # Non-live mode → do not issue Google API calls
     if not live:
         if needs_lookup:
             logger.info(
                 "[google_types] Live mode disabled; "
                 f"{len(needs_lookup)} merchants have no cached types."
             )
-        # For non-live mode, merchants without data just get empty lists
         for desc in needs_lookup:
             results.setdefault(desc, [])
         return results
 
-    # -----------------------------------------------------------------------
-    # LIVE MODE: perform real Google Places lookups, with safety
-    # -----------------------------------------------------------------------
+    # Live mode → perform lookups
     api_key = os.getenv("GOOGLE_PLACES_API_KEY")
     if not api_key:
         logger.error(
@@ -119,19 +112,25 @@ def get_types_for_descriptions(descriptions, live=False, interactive=False):
         logger.info("[google_types] No merchants require live lookup.")
         return results
 
-    # Safety: show cost & prompt before making any paid calls
     if interactive:
         _prompt_for_live_confirmation(needs_lookup)
 
-    # Now perform real lookups
     ops = []
     timestamp = datetime.datetime.utcnow()
+
+    # Load merchant priority scoring map once for the run
+    type_priority_map = {
+        doc["google_type"]: doc.get("priority", 0)
+        for doc in type_map_coll.find({}, {"_id": 0, "google_type": 1, "priority": 1})
+    }
 
     for idx, desc in enumerate(needs_lookup, start=1):
         logger.info(f"[google_types] ({idx}/{len(needs_lookup)}) Looking up '{desc}'...")
 
         place_id, raw_types = _lookup_google_by_text(desc, api_key)
         filtered = _filter_google_types(raw_types, valid_types)
+        primary = _select_primary_type(filtered, type_priority_map)
+
         status = "ok" if filtered or place_id else "not_found"
 
         ops.append(
@@ -142,6 +141,7 @@ def get_types_for_descriptions(descriptions, live=False, interactive=False):
                         "description_key": desc,
                         "google_place_id": place_id,
                         "google_types": filtered,
+                        "google_primary_type": primary,
                         "google_lookup_status": status,
                         "google_last_checked": timestamp,
                     }
@@ -151,8 +151,6 @@ def get_types_for_descriptions(descriptions, live=False, interactive=False):
         )
 
         results[desc] = filtered
-
-        # Basic rate limiting for safety
         time.sleep(0.2)
 
     if ops:
@@ -170,38 +168,43 @@ def get_types_for_descriptions(descriptions, live=False, interactive=False):
 
 def get_types_for_transactions(txns, apply=False, live=False, interactive=False):
     """
-    Accepts a list of full transaction records (dicts).
+    Resolve Google merchant types for a batch of full transaction records.
 
-    Behavior:
-      - Extracts descriptions from txns.
-      - Resolves merchant types via get_types_for_descriptions().
-      - If apply=False (default):
-            Returns { txn_id: [google_types...] }.
-      - If apply=True:
-            Computes tokens = description_tokens + google_types
-            Stores them in txn["_tokens"] (NOT persisted).
-            Returns the modified list of txns.
+    Args:
+        txns (list[dict]):
+            Must include at least "id" and "description".
+        apply (bool):
+            If False:
+                Return dict {id → list of google_types}.
+            If True:
+                Injects a "_tokens" list into each transaction record, consisting
+                of description tokens + google_types.
+        live (bool):
+            Whether to call Google for missing merchants.
+        interactive (bool):
+            Whether to show safety prompt for live mode.
+
+    Returns:
+        dict[str, list[str]] | list[dict]:
+            Either a mapping id → google types (apply=False),
+            OR the modified transaction list (apply=True).
     """
     if not txns:
         return [] if apply else {}
 
     descriptions = [txn["description"] for txn in txns]
-
-    # Merchant-type lookup (normalized keys)
     merchant_map = get_types_for_descriptions(
         descriptions, live=live, interactive=interactive
     )
 
     if not apply:
-        # Map txn_id -> google types
-        id_to_types = {}
+        out = {}
         for txn in txns:
             desc_key = _normalize_description(txn["description"])
-            gtypes = merchant_map.get(desc_key, [])
-            id_to_types[txn["id"]] = gtypes
-        return id_to_types
+            out[txn["id"]] = merchant_map.get(desc_key, [])
+        return out
 
-    # apply=True -> modify txns in-place with _tokens
+    # apply=True
     for txn in txns:
         desc_key = _normalize_description(txn["description"])
         gtypes = merchant_map.get(desc_key, [])
@@ -212,12 +215,16 @@ def get_types_for_transactions(txns, apply=False, live=False, interactive=False)
 
 def get_types_for_transaction_ids(ids, apply=False, live=False, interactive=False):
     """
-    Loads transactions by ID, then delegates to get_types_for_transactions().
+    Resolve Google merchant types for a set of transaction IDs.
 
     Args:
-        ids: list[str] of transaction IDs
-        apply: see get_types_for_transactions()
-        live: if True, perform live Google lookups (with safety)
+        ids (list[str]): Transaction primary keys.
+        apply (bool): See get_types_for_transactions().
+        live (bool): Live Google lookups allowed?
+        interactive (bool): Display prompt before billing Google?
+
+    Returns:
+        Same as get_types_for_transactions().
     """
     if not ids:
         return [] if apply else {}
@@ -240,15 +247,22 @@ def get_types_for_transaction_ids(ids, apply=False, live=False, interactive=Fals
 def get_types_for_query(query_dict, projection=None, apply=False,
                         live=False, interactive=False):
     """
-    Runs a Mongo query to fetch transaction records, then delegates
-    to get_types_for_transactions().
+    Lookup Google merchant types for a MongoDB query over transactions.
 
     Args:
-        query_dict: MongoDB filter dict for transactions.
-        projection: MongoDB projection dict. If None, uses:
-                    {"_id": 0, "id": 1, "description": 1}
-        apply: see get_types_for_transactions().
-        live: if True, perform live Google lookups (with safety)
+        query_dict (dict):
+            Mongo filter for the transactions collection.
+        projection (dict | None):
+            Mongo projection. Defaults to {"id", "description"}.
+        apply (bool):
+            Whether to inject tokens into the results.
+        live (bool):
+            Whether to call Google for missing merchants.
+        interactive (bool):
+            Whether to confirm cost with user.
+
+    Returns:
+        Dict or modified list of txns, same as get_types_for_transactions().
     """
     db = db_module.db
     trx_coll = db["transactions"]
@@ -269,27 +283,41 @@ def get_types_for_query(query_dict, projection=None, apply=False,
 
 def _ensure_merchant_index(merchant_coll):
     """
-    Ensure we have an index on description_key for efficient lookups.
-    Safe to call repeatedly (idempotent).
+    Ensure we have a unique index on description_key.
+    Called every run; safe because index creation is idempotent.
+
+    Args:
+        merchant_coll (pymongo.collection.Collection)
     """
     merchant_coll.create_index("description_key", unique=True)
 
 
 def _normalize_description(desc):
     """
-    Normalize a description string into a merchant key.
+    Normalize raw transaction descriptions.
 
-    For now:
-      - uppercase
-      - strip leading/trailing whitespace
+    Steps:
+        - Convert to uppercase
+        - Strip leading/trailing whitespace
+
+    Args:
+        desc (str): Raw transaction description.
+
+    Returns:
+        str: Normalized description_key.
     """
     return desc.upper().strip()
 
 
 def _prompt_for_live_confirmation(needs_lookup):
     """
-    Show how many merchants will be looked up, estimate cost,
-    show a sample of descriptions, and prompt the user to confirm.
+    Prompt user with safety confirmation for live Google lookups.
+
+    Args:
+        needs_lookup (list[str]): List of merchants lacking cached lookups.
+
+    Raises:
+        RuntimeError: If user declines the operation.
     """
     count = len(needs_lookup)
     est_cost = round(count * ESTIMATED_COST_PER_MERCHANT, 2)
@@ -304,7 +332,6 @@ def _prompt_for_live_confirmation(needs_lookup):
         for desc in sample:
             logger.info(f"    - {desc}")
 
-    # Explicit prompt to user (no calls until confirmed)
     answer = input(
         f"\nThis will perform {count} Google Places lookups "
         f"(estimated cost ≈ ${est_cost:.2f}). Proceed? [y/N]: "
@@ -312,18 +339,21 @@ def _prompt_for_live_confirmation(needs_lookup):
 
     if answer not in ("y", "yes"):
         logger.info("[google_types] User declined live lookup. Aborting.")
-        # Abort by raising a soft exception that caller can catch or treat as no-op
         raise RuntimeError("Live Google lookup aborted by user.")
 
 
 def _lookup_google_by_text(cleaned_desc, api_key):
     """
-    Google Places API v3 'searchText' call.
+    Perform Google Places API searchText lookup for a cleaned description.
+
+    Args:
+        cleaned_desc (str): Normalized merchant description.
+        api_key (str): Google Places API key.
 
     Returns:
-        (place_id: str | None, raw_types: list[str])
-
-    If any error occurs or no place is found, returns (None, []).
+        tuple:
+            (place_id: str | None,
+             raw_types: list[str])
     """
     url = "https://places.googleapis.com/v1/places:searchText"
 
@@ -334,7 +364,6 @@ def _lookup_google_by_text(cleaned_desc, api_key):
     headers = {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": api_key,
-        # Only request what we need: id and types
         "X-Goog-FieldMask": "places.id,places.types",
     }
 
@@ -378,21 +407,72 @@ def _lookup_google_by_text(cleaned_desc, api_key):
 
 def _filter_google_types(raw_types, valid_types):
     """
-    Filters raw Google types through the whitelist in google_type_mappings.
+    Filter Google-provided categories down to the curated whitelist.
+
+    Args:
+        raw_types (list[str]):
+            Types returned by Google for a merchant.
+        valid_types (set[str]):
+            Allowed types from google_type_mappings.
+
+    Returns:
+        list[str]:
+            Types that are both in Google output and in the whitelist,
+            preserving Google's original order.
     """
     return [t for t in raw_types if t in valid_types]
 
 
+def _select_primary_type(filtered_types, type_priority_map):
+    """
+    Determine the single best merchant type via weighted scoring:
+
+        score = priority_from_csv + google_reverse_rank
+
+    Where google_reverse_rank = N - idx for a list of length N.
+
+    Args:
+        filtered_types (list[str]):
+            Whitelisted Google types returned by the API.
+        type_priority_map (dict[str, int]):
+            Merchant type → priority score loaded from CSV → Mongo.
+
+    Returns:
+        str | None:
+            The highest scoring type, or None if filtered_types is empty.
+    """
+    if not filtered_types:
+        return None
+
+    n = len(filtered_types)
+    best_type = None
+    best_score = -1
+
+    for idx, t in enumerate(filtered_types):
+        csv_priority = type_priority_map.get(t, 0)
+        google_weight = n - idx
+        score = csv_priority + google_weight
+
+        if score > best_score:
+            best_score = score
+            best_type = t
+
+    return best_type
+
+
 def _apply_tokens_to_transaction(txn, google_types):
     """
-    Compute tokens for rule matching from:
-        - description tokens
-        - filtered google_types
+    Insert a "_tokens" field into a transaction object for rule matching.
 
-    Store them in txn["_tokens"].
+    Tokens include:
+        - Description tokens (splitting uppercase description on whitespace)
+        - Google merchant types (filtered list)
 
-    This field is intended for in-memory consumption by the rule engine
-    and is NOT persisted back to MongoDB.
+    Args:
+        txn (dict):
+            Transaction record (modified in-place).
+        google_types (list[str]):
+            Filtered list of merchant types.
     """
     desc_tokens = _tokenize_description(txn["description"])
     txn["_tokens"] = desc_tokens + list(google_types)
@@ -400,8 +480,12 @@ def _apply_tokens_to_transaction(txn, google_types):
 
 def _tokenize_description(desc):
     """
-    Basic tokenizer:
-        - uppercase
-        - split on whitespace
+    Tokenize a raw description for rule matching.
+
+    Args:
+        desc (str): Raw description.
+
+    Returns:
+        list[str]: Uppercase tokens split on whitespace.
     """
     return desc.upper().split()

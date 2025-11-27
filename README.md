@@ -12,72 +12,245 @@ https://github.com/CohortInsights/financials
 ## 📂 Project Structure
     financials/
     ├── financials/
-    │   ├── __init__.py             # Package initializer
-    │   ├── calculator.py           # Normalizes CSVs and persists data to MongoDB
-    │   ├── drive.py                # Handles Google Drive API access
-    │   ├── web.py                  # Flask app entry point (routes import app directly; no Blueprints)
-    │   ├── db.py                   # MongoDB connection utilities
+    │   ├── __init__.py
+    │   ├── calculator.py
+    │   ├── drive.py
+    │   ├── web.py
+    │   ├── db.py
     │   │
-    │   ├── routes/                 # Flask route modules (attach directly to app)
-    │   │   ├── __init__.py         # Enables route package imports
-    │   │   ├── dashboard.py        # /dashboard → renders HTML dashboard
-    │   │   ├── api_transactions.py # /api/transactions → serves normalized transaction JSON
-    │   │   ├── assign.py           # /assign_transaction → manual assignments
-    │   │   └── rules.py            # /api/rules → CRUD endpoints for assignment rules (Mongo)
+    │   ├── routes/
+    │   │   ├── __init__.py
+    │   │   ├── dashboard.py
+    │   │   ├── api_transactions.py
+    │   │   ├── assign.py
+    │   │   └── rules.py
     │   │
-    │   ├── utils/                  # Shared backend helper modules
-    │   │   ├── __init__.py         # Enables utils package imports
-    │   │   └── services.py         # Provides get_drive_service(), get_calculator(), set_cache_dir()
+    │   ├── utils/
+    │   │   ├── __init__.py
+    │   │   ├── services.py
+    │   │   └── google_types.py            # Merchant-type lookup + caching + Google Places integration
     │   │
-    │   ├── templates/              # HTML/CSS/JS for dashboard UI (served directly)
-    │   │   ├── dashboard.html      # Main dashboard (Transactions + Rules tabs, Add Rule modal)
-    │   │   ├── code.js             # Base DataTable + client-side behavior
-    │   │   ├── transactions.js     # Transactions tab interactions and assignment actions
-    │   │   ├── rules.js            # Rules tab (modal open/save, table init/refresh)
-    │   │   └── styles.css          # UI styling (incl. modal size/scroll tweaks)
+    │   ├── templates/
+    │   │   ├── dashboard.html
+    │   │   ├── code.js
+    │   │   ├── transactions.js
+    │   │   ├── rules.js
+    │   │   └── styles.css
     │   │
-    │   ├── scripts/                # Maintenance and administrative utilities
-    │   │   ├── delete_entries.py   # Deletes all docs for a given source
-    │   │   ├── update_indexes.py   # Updates all MongoDB indexes (idempotent)
-    │   │   └── rebuild_assignments.py # Rebuilds rule_matches + transaction assignments (slow/fast path)
+    │   ├── scripts/
+    │   │   ├── delete_entries.py
+    │   │   ├── update_indexes.py
+    │   │   ├── rebuild_assignments.py
+    │   │   └── get_google_types.py        # CLI tool for merchant-type enrichment (cached or live)
     │   │
-    │   └── assign_rules.py         # Backend rule engine for automatic transaction categorization
+    │   └── assign_rules.py
     │
-    ├── main_ingest.py              # Standalone ingestion entry point (CLI)
-    ├── main.py                     # Entry point that invokes financials/web.py
+    ├── main_ingest.py
+    ├── main.py
     │
-    ├── tests/                      # Unit tests
-    │   └── test_calculator.py      # Tests for normalization logic
+    ├── cfg/
+    │   └── google_types_to_expenses.csv   # Curated ontology mapping Google types → Expense.* categories
     │
-    ├── pyproject.toml              # Poetry dependencies and configuration
-    ├── README.md                   # Project documentation
-    ├── .env                        # Environment variables (credentials, URIs)
-    └── .gitignore                  # Ignores secrets and build junk
-
+    ├── tests/
+    │   └── test_calculator.py
+    │
+    ├── pyproject.toml
+    ├── README.md
+    ├── .env
+    └── .gitignore
 
 ### Mongo Collections
-- transactions : Stores all normalized financial transactions (id, date, source, description, amount, type, assignment). The assignment field always reflects the current winning assignment (manual or automatic)
-- assignment_rules : Stores all automatic categorization rules (id, assignment, priority, source, description, min_amount, max_amount). These define the matching logic but do not store which transactions they match
-- transaction_assignments : Tracks all assignment applications (id, assignment, type, timestamp). Includes both manual and auto entries. Manual assignments always take precedence
-- rule_matches : Materialized table of all rule-to-transaction matches (rule_id, txn_id, priority, assignment). Used to compute winners efficiently and to support incremental rule updates without re-evaluating all rules
+
+- transactions  
+  Stores all normalized financial transactions (id, date, source, description, amount, type, assignment).  
+  The `assignment` field always reflects the current winning assignment (manual or automatic).
+
+- assignment_rules  
+  Stores all automatic categorization rules (assignment, priority, source filters, description substring filters, amount ranges).  
+  These rules define the matching logic used by the assignment engine.
+
+- transaction_assignments  
+  Audit log of all assignment events.  
+  Contains `{transaction_id, assignment, type (manual|auto), timestamp}`.  
+  Manual assignments always override automatic rules and can never be replaced.
+
+- rule_matches  
+  Materialized table storing every rule-to-transaction match `{rule_id, txn_id, priority, assignment}`.  
+  Supports efficient winner selection and incremental updates when rules are created, edited, or deleted.
+
+- google_merchant_types  
+  Cache of semantic merchant lookups via the Google Places API.  
+  One document per *unique transaction description*.  
+  Fields include:  
+  • description (string, bank-provided)  
+  • types (array of filtered Google semantic types)  
+  • place_id (Google Places identifier)  
+  • status ("ok", "not_found", "ambiguous", "error")  
+  • updated_at (timestamp)  
+  This cache prevents repeated paid API calls and enables semantic rule generation.
+
+
+---
+
+## Mongo Collection Details
+
+This project uses several MongoDB collections to support ingestion, normalization, rule-based assignment, and merchant-type enrichment. Below is a detailed description of each collection and its schema.
+
+### transactions
+Stores all normalized financial transactions imported from CSVs.  
+Each record is uniquely identified by a synthetic `id` generated from date, source, description, and amount.
+
+Fields:
+- id : unique string identifier  
+- date : datetime  
+- source : string (bmo, citi, chase, paypal, etc.)  
+- description : string (raw bank description)  
+- amount : float  
+- type : "Credit" or "Debit"  
+- assignment : string (manual or winning auto-assignment)  
+- action, symbol, quantity, price : optional fields for Schwab trade data
+
+### assignment_rules
+Defines automatic categorization rules.  
+Rules are applied to every transaction based on source, description substring logic, and amount ranges.
+
+Fields:
+- id  
+- assignment  
+- priority  
+- source (comma-separated list of allowed sources or empty string for “any”)  
+- description (substring OR/AND logic, e.g. "amazon|amzn" or "kwik,trip")  
+- min_amount  
+- max_amount  
+
+### transaction_assignments
+Audit log of all assignment events.  
+Stores both manual and automatic assignments.
+
+Fields:
+- id : transaction id  
+- assignment  
+- type : "manual" or "auto"  
+- timestamp
+
+Manual assignments always override automatic rules.
+
+### rule_matches
+Materialized table storing all rule-to-transaction matches.  
+Used to efficiently compute winning rule for each transaction.
+
+Fields:
+- rule_id  
+- txn_id  
+- priority  
+- assignment  
+
+This table is fully rebuilt when rules change.
+
+### google_merchant_types
+Stores the results of Google Places merchant-type lookups for unique transaction descriptions.  
+This provides semantic enrichment for rule creation and automated categorization.
+
+Fields:
+- description : raw bank description  
+- types : array of Google semantic types (filtered to supported ontology)  
+- place_id : Google Places identifier  
+- status : "ok" (successful lookup), "not_found", "ambiguous", or "error"  
+- updated_at : timestamp of last lookup  
+
+This collection acts as a cache to prevent repeated paid API lookups.
+
+---
+
+## Google Merchant-Type Enrichment
+
+Financial transaction descriptions from banks are often opaque or non-semantic (e.g. “KWIK TRIP 123”, “SQ *JOES COFFEE”). To support more accurate auto-assignment rules, the system integrates with the Google Places API to map raw descriptions into semantic merchant categories.
+
+### Enrichment Workflow
+
+1. Extract unique transaction descriptions from MongoDB, filtered by optional flags (`--source`, `--year`, `--description`).  
+2. For each description:  
+   - Check google_merchant_types for cached lookup results.  
+   - If status is "ok", reuse the stored types.  
+   - If no cached entry exists, and live mode is enabled, perform a Google Places API searchText lookup.  
+3. Filter returned Google types against the project's curated ontology (from google_types_to_expenses.csv).  
+4. Store the result in google_merchant_types with status, types, and place_id.  
+
+This process ensures:
+- No repeated paid requests  
+- Transparent caching  
+- Full cost visibility before any charge is incurred  
+- Safe dry-run mode  
+- Reproducibility for all future runs  
+
+### Enrichment Script
+
+The enrichment process is driven by:
+
+financials/scripts/get_google_types.py
+
+It supports:
+- --source : restrict by account source  
+- --year : restrict by transaction year  
+- --description : case-insensitive substring filter  
+- --all : process all transactions  
+- --live : enable real Google API calls (with confirmation prompt)  
+
+Without `--live`, the script performs only cache lookups.
+
+Example usage:
+poetry run python -m financials.scripts.get_google_types --source BMO --year 2025 --description "KWIK TRIP" --live
+
+### Google Places API Integration
+
+The system uses:
+POST https://places.googleapis.com/v1/places:searchText
+
+The returned merchant types are mapped only if they appear in the curated Google-type ontology defined in:
+
+financials/cfg/google_types_to_expenses.csv
+
+This prevents noise from generic Google categories and ensures consistent mapping to Financials assignments.
+
+### Automatic Rule Seeding
+
+Rules can be bulk-created from the type-to-expense mapping:
+
+poetry run python -m financials.scripts.update_indexes --rules
+
+This installs assignment_rules with:
+- priority = 2  
+- description = google merchant type  
+- assignment = mapped Expense.* category  
+
+These rules provide broad, semantically accurate auto-assignment coverage without manual creation.
+
+### Benefits
+
+- Stronger, more semantic auto-assignment  
+- No brittle substring matching for most merchants  
+- Very low cost due to caching and controlled live lookups  
+- Full transparency and safety before any paid API usage  
+- Easy extensibility for new merchant categories  
+- Reproducible enrichment data for consistent long-term reporting  
 
 ---
 
 ## 🧩 Conventions
 
-- **drive.py** → Google Drive API access only  
-- **calculator.py** → `FinancialsCalculator` handles normalization + persistence  
-- **db.py** → manages MongoDB client connections (`db_module.db["transactions"]`)  
-- **main_ingest.py** → CLI entry for background ingestion (`poetry run python main_ingest.py`)  
-- **web.py** → Flask app entry point with dashboard and JSON API routes  
-- **templates/** → dashboard front-end (`dashboard.html`, `styles.css`, `code.js`)  
-- **scripts/delete_entries.py** → deletes transactions by source (`--source bmo`, etc.)
+- drive.py → Google Drive API access only  
+- calculator.py → FinancialsCalculator handles normalization + persistence  
+- db.py → manages MongoDB client connections (`db_module.db["transactions"]`)  
+- main_ingest.py → CLI entry for background ingestion (`poetry run python main_ingest.py`)  
+- web.py → Flask app entry point with dashboard and JSON API routes  
+- templates/ → dashboard front-end (`dashboard.html`, `styles.css`, `code.js`)  
+- scripts/delete_entries.py → deletes transactions by source (`--source bmo`, etc.)
 
 ---
 
 ## ⚙️ Setup
 
-Requires **Python 3.12+** and [Poetry](https://python-poetry.org/).
+Requires Python 3.12+ and Poetry.
 
     poetry install
     poetry shell
@@ -86,9 +259,9 @@ Requires **Python 3.12+** and [Poetry](https://python-poetry.org/).
 
 ## 🔑 Credentials
 
-Provide Google Drive OAuth credentials under `json/`, ignored by Git.  
-On first run, token files (e.g. `token.drive.pickle`) are created automatically.  
-Do **not** commit these credentials.
+Provide Google Drive OAuth credentials under json/, ignored by Git.  
+On first run, token files (e.g. token.drive.pickle) are created automatically.  
+Do not commit these credentials.
 
 ---
 
@@ -104,130 +277,109 @@ Tests cover normalization for BMO, Citi, Chase, PayPal, Capitol One, Schwab, and
 
     poetry run flask --app financials/web.py run
 
-Then open: <http://127.0.0.1:5000/dashboard>
+Then open:  
+http://127.0.0.1:5000/dashboard
 
 ---
 
 ## 🧲 Data Ingestion
 
-You can import normalized financials directly into MongoDB.
+You can import normalized data directly into MongoDB.
 
     poetry run python main_ingest.py
 
 ### What Happens
-`main_ingest.py` calls the ingestion routine defined in `financials/calculator.py`, which:
-1. Uses the `FinancialsCalculator` class to download and normalize all statement CSVs for each year.  
-2. Pre-loads `Checks-YEAR.csv` (if present) and builds a mapping `{check_no → {payee, assignment}}`.  
-3. Normalizes BMO, Citi, PayPal, CapitolOne, Schwab, etc., replacing any BMO “DDA CHECK” transactions with the corresponding **Pay To** and **Assignment** fields from the Checks file.  
-4. Calls `add_transaction_ids(df)` to generate consistent IDs derived from each row’s source, date, description, and amount.  
-5. Connects to MongoDB and inserts new rows, skipping duplicates, logging counts.  
+1. Download and normalize CSVs from Google Drive  
+2. Pre-load Checks-YEAR.csv (if present)  
+3. Enrich BMO transactions with check metadata  
+4. Generate transaction IDs  
+5. Insert new rows into MongoDB  
 
-Each normalized record follows this schema:  
-`date, source, description, amount, type, assignment, [action, symbol, quantity, price]`
+Schema:  
+date, source, description, amount, type, assignment, [action, symbol, quantity, price]
 
 ---
 
 ## 🧮 Normalization Details
 
 ### BMO + Checks Integration
-- When a **Checks-YEAR.csv** file is present, it is read first.  
-- Each BMO row with a matching `TRANSACTION REFERENCE NUMBER` or `FI TRANSACTION REFERENCE` is enriched with:
-  - `description` → replaced by the check’s “Pay To” value  
-  - `assignment` → the check’s “Assignment” value, prefixed with `Expense.` (e.g. “Expense.Charity.KOC”)  
-- Non-check rows remain unchanged.  
+- Replace DDA CHECK rows with payee and assignment from Checks file  
+- Automatically prefix assignments with Expense.*  
+- Skip non-matching rows  
 
 Example:
 
-| POSTED DATE | DESCRIPTION | AMOUNT | TRANSACTION REF | TYPE | → | description | assignment |
-|--------------|--------------|---------|------------------|------|----|--------------|-------------|
-| 08/09/2024 | DDA CHECK | -26.34 | 9502 | Debit | → | St Christopher CP | Expense.Charity.Church |
-| 08/08/2024 | DDA CHECK | -100.00 | 9504 | Debit | → | City of Verona Dog Licensing | Expense.Taxes.Licenses |
-
----
+POSTED DATE | DESCRIPTION | AMOUNT | TRANSACTION REF | TYPE → description | assignment  
+08/09/2024 | DDA CHECK | -26.34 | 9502 | Debit → St Christopher CP | Expense.Charity.Church
 
 ### Schwab
-- Supports stock trades with fields `action`, `symbol`, `quantity`, and `price`.
-- All numeric parsing via `_parse_numeric()` handles `$` and `,` cleanup.
-- Adds `type` as Credit/Debit based on `amount` sign.
-
----
+- Handles stock trades  
+- Parses price, quantity, symbol  
+- Produces credit/debit type automatically
 
 ### Checks
-- Normalized separately to a lookup mapping `{check_no: {"payee", "assignment"}}`.
-- Prepends `"Expense."` to all assignments for downstream categorization.
-- Used only as enrichment; no direct insertion into Mongo.
+- Loaded as mapping {check_no : {payee, assignment}}  
+- Not stored directly in Mongo  
 
 ---
 
 ## 🧰 Utility Scripts
 
 ### Delete Entries
-
     poetry run python -m financials.scripts.delete_entries --source bmo
 
-Deletes all MongoDB transactions from a specified source.  
-Prompts before deletion and logs counts.
+Removes all transactions for a given source.
 
 ---
 
 ## 🌐 Dashboard and API
 
 ### Dashboard
-Access the live UI at `/dashboard`.
 
-Features:
-- Multi-year checkbox selection  
-- Scrollable, paginated, sortable transactions **DataTable**
-- Footer row filters for each column  
-- Default sort by **Date (descending)**  
-- Supports multi-column sorting via **Shift+click**
+- Multi-year filtering  
+- DataTables backend  
+- Column filtering  
+- Shift-click multi-column sort  
+- Modal UI for rules  
 
 ### Backend API
-The `/api/transactions` route serves JSON data directly from MongoDB with optional year filters.
+
+- /api/transactions  
+- Optional year filtering  
+- JSON output  
+
 ---
 
 ## 🗺️ Roadmap
 
 ### Visualization
-- [ ] Add `/api/summary` endpoint for chart data  
-- [ ] Integrate Chart.js or Plotly visualizations  
-- [ ] Support assignment-based spending charts
+- Add summary endpoint  
+- Add spending charts  
+- Add assignment breakdowns  
 
 ### Data Ingestion
-- ✅ Multi-year imports to MongoDB  
-- ✅ Add Schwab and Checks account normalizers  
-- ✅ BMO transactions enriched with check assignments  
-- ✅ Manual categorization for transactions
-- ✅ UI for addition of rules
-- ✅ Auto categorization for transactions (see Assignment of Transactions section)
+- Multi-year support (done)  
+- Schwab + Checks support (done)  
+- Manual categorization (done)  
+- Rule UI (done)  
+- Auto-assignment engine (done)
 
-### Assignment of Transactions
-- Transactions from all sources have an "Assignment" field in the form a.b.c (e.g. Expense, Expense.Food.Groceries, Income.WRS.Roger)
-- An assignment can be made manually from the transactions table
-- Automated assignments are controlled by rules stored in the assignment_rules collection
-- Rules contain fields of id, assignment, priority, source, description, min_amount, max_amount
-- Rules are added, updated, and deleted from the Rules tab (CRUD) and stored in the assignment_rules collection
-- The Source field of a rule applies "equals" logic to the source of each transaction (a means "source equals a"; a,b means "source equals (a or b)")
-- The Description field applies substring-based logic (a,b means "description contains a and b"; a|b means "description contains a or description contains b")
-- The values of min_amount and max_amount apply numeric filters to each transaction amount
-- If a transaction matches multiple rules, the rule with the highest priority takes precedence
-- If a transaction matches multiple rules with the same priority, the most recently created rule is applied
-- When a rule matches a transaction, the rule's assignment is used to set the transaction's assignment, and a corresponding auto entry is added to the transaction_assignments table
-- Manual assignments override all rules and are never replaced by automatic logic
-- A materialized table named rule_matches stores all rule-to-transaction matches and is used to compute the highest priority match for each transaction
-- The fields of transaction_assignments are transaction_id, assignment, type (auto or manual), and timestamp
+### Assignment Engine
+- Manual > automatic precedence  
+- Priority-based rule selection  
+- Materialized rule_matches  
+- Auto + manual auditing
 
 ### DevOps
-- [ ] Add GitHub Actions for automated testing
+- Optional GitHub Actions
 
 ---
 
 ## 📜 License
-
-TBD — consider MIT or Apache 2.0.
+TBD (MIT or Apache 2.0)
 
 ---
 
 ## 🤝 Contributing
-
-Pull requests are welcome. This is an evolving personal project under the **CohortInsights** organization.
+Pull requests are welcome.  
+This is an evolving personal project under the CohortInsights organization.
