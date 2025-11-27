@@ -40,6 +40,7 @@ https://github.com/CohortInsights/financials
     │   ├── scripts/
     │   │   ├── delete_entries.py
     │   │   ├── update_indexes.py
+    │   │   ├── update_rules.py
     │   │   ├── rebuild_assignments.py
     │   │   └── get_google_types.py
     │   │
