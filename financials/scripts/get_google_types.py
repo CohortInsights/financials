@@ -106,16 +106,18 @@ def build_query(source=None, year=None, description=None):
 # Operations
 # ------------------------------------------------------------------------------
 
-def enrich_filtered_transactions(source=None, year=None, description=None, live=False):
+def enrich_filtered_transactions(source=None, year=None, description=None, live=False, force=False):
     """
     Enrich merchant types for transactions restricted by source/year/description.
 
-    If live=False:
+    If live=False and force=False:
         - Only cached merchant types are used; no paid Google calls.
     If live=True:
-        - Real Google Places lookups are performed for merchants that
-          have no 'ok' cached types, with a cost estimate and user prompt
-          before any requests are sent.
+        - Real Google Places lookups are performed for missing merchants.
+    If force=True:
+        - Live lookups are performed for ALL merchants, even if cached.
+        - Cached values are overwritten.
+        - Still prompts user before running.
     """
     query = build_query(source=source, year=year, description=description)
 
@@ -131,8 +133,9 @@ def enrich_filtered_transactions(source=None, year=None, description=None, live=
             query,
             projection=projection,
             apply=False,
-            live=live,
-            interactive=live,
+            live=True if force else live,
+            interactive=True,
+            force=force
         )
         logger.info("[get_google_types] Enrichment complete.")
     except RuntimeError as e:
@@ -148,7 +151,6 @@ if __name__ == "__main__":
         description="Google merchant-type enrichment tool"
     )
 
-    # NEW OPTION
     parser.add_argument(
         "--upload",
         action="store_true",
@@ -176,8 +178,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--live",
         action="store_true",
-        help="Perform LIVE Google Places lookups (with confirmation prompt). "
-             "Without this flag, no paid API calls are made."
+        help="Perform LIVE Google Places lookups (only for missing merchants)."
+    )
+
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Force live lookups for ALL merchants, overwriting cached results."
     )
 
     parser.add_argument(
@@ -204,7 +211,8 @@ if __name__ == "__main__":
             source=None,
             year=None,
             description=args.description,
-            live=args.live
+            live=args.live,
+            force=args.force
         )
     else:
         if args.source or args.year or args.description:
@@ -213,9 +221,10 @@ if __name__ == "__main__":
                 year=args.year,
                 description=args.description,
                 live=args.live,
+                force=args.force
             )
         else:
             logger.info(
                 "No action specified. Use --all, or --source/--year/--description filters. "
-                "Example:  --source BMO  --year 2024  --description \"KWIK TRIP\" [--live]"
+                "Example:  --source BMO  --year 2024  --description \"KWIK TRIP\" [--live|--force]"
             )

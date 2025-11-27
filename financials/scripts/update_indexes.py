@@ -1,4 +1,3 @@
-# financials/scripts/update_indexes.py
 """
 Ensure MongoDB indexes exist for Financials collections.
 Safe to run multiple times — MongoDB will skip duplicates.
@@ -11,12 +10,15 @@ rule_matches collection for incremental rule updates.
 import os
 import csv
 import argparse
+import logging
 from financials import db as db_module
+
+logger = logging.getLogger(__name__)
 
 
 def ensure_indexes():
     db = db_module.db
-    print("🔧 Ensuring indexes for Financials database...")
+    logger.info("🔧 Ensuring indexes for Financials database...")
 
     # ----------------------------------------------------------------------
     # transactions collection
@@ -48,7 +50,7 @@ def ensure_indexes():
     rules.create_index([("priority", -1), ("source", 1)])
 
     # ----------------------------------------------------------------------
-    # NEW: rule_matches collection
+    # rule_matches collection
     # ----------------------------------------------------------------------
     rm = db["rule_matches"]
 
@@ -64,7 +66,7 @@ def ensure_indexes():
     # Efficient delete when rebuilding (rule edit/delete)
     rm.create_index([("rule_id", 1), ("txn_id", 1)])
 
-    print("✅ Index verification complete.")
+    logger.info("✅ Index verification complete.")
 
 
 def install_google_type_rules():
@@ -75,6 +77,9 @@ def install_google_type_rules():
         source       = ""
         description  = google_type
         assignment   = assignment from CSV
+
+    Matching rule for update/insert:
+        priority == 2 AND source == "" AND description == google_type
     """
     db = db_module.db
     rules = db["assignment_rules"]
@@ -85,12 +90,14 @@ def install_google_type_rules():
     cfg_path = os.path.abspath(cfg_path)
 
     if not os.path.exists(cfg_path):
-        print(f"⚠️ google_types_to_expenses.csv not found: {cfg_path}")
+        logger.warning(f"⚠️ google_types_to_expenses.csv not found: {cfg_path}")
         return
 
-    print(f"📥 Installing Google-type rules from {cfg_path}...")
+    logger.info(f"📥 Installing Google-type rules from {cfg_path}...")
 
-    count = 0
+    inserted = 0
+    updated = 0
+
     with open(cfg_path, newline="") as f:
         reader = csv.DictReader(f)
         for row in reader:
@@ -100,8 +107,8 @@ def install_google_type_rules():
             if not google_type:
                 continue
 
-            rules.update_one(
-                {"source": "", "description": google_type},
+            result = rules.update_one(
+                {"priority": 2, "source": "", "description": google_type},
                 {
                     "$set": {
                         "source": "",
@@ -112,12 +119,21 @@ def install_google_type_rules():
                 },
                 upsert=True,
             )
-            count += 1
 
-    print(f"✅ Installed/updated {count} Google-type rules.")
+            if result.matched_count == 1:
+                updated += 1
+            else:
+                inserted += 1
+
+    logger.info(
+        f"✅ Installed Google-type rules: {updated} updated, {inserted} inserted."
+    )
 
 
 if __name__ == "__main__":
+    import logging
+    logging.basicConfig(level=logging.INFO)
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--rules", action="store_true",
                         help="Install Google-type assignment rules from CSV")

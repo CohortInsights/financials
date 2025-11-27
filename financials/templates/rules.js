@@ -38,8 +38,8 @@ function loadRulesTable() {
           { data: "priority" },
           { data: "source" },
           { data: "description" },
-          { data: "min_amount" },
-          { data: "max_amount" },
+          { data: "min_amount", defaultContent: "" },
+          { data: "max_amount", defaultContent: "" },
           {
             data: null,
             render: () => `
