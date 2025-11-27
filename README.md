@@ -28,7 +28,7 @@ https://github.com/CohortInsights/financials
     │   ├── utils/
     │   │   ├── __init__.py
     │   │   ├── services.py
-    │   │   └── google_types.py            # Merchant-type lookup + caching + Google Places integration
+    │   │   └── google_types.py
     │   │
     │   ├── templates/
     │   │   ├── dashboard.html
@@ -41,7 +41,7 @@ https://github.com/CohortInsights/financials
     │   │   ├── delete_entries.py
     │   │   ├── update_indexes.py
     │   │   ├── rebuild_assignments.py
-    │   │   └── get_google_types.py        # CLI tool for merchant-type enrichment (cached or live)
+    │   │   └── get_google_types.py
     │   │
     │   └── assign_rules.py
     │
@@ -49,7 +49,7 @@ https://github.com/CohortInsights/financials
     ├── main.py
     │
     ├── cfg/
-    │   └── google_types_to_expenses.csv   # Curated ontology mapping Google types → Expense.* categories
+    │   └── google_types_to_expenses.csv
     │
     ├── tests/
     │   └── test_calculator.py
@@ -59,85 +59,47 @@ https://github.com/CohortInsights/financials
     ├── .env
     └── .gitignore
 
-### Mongo Collections
-
-- transactions  
-  Stores all normalized financial transactions (id, date, source, description, amount, type, assignment).  
-  The `assignment` field always reflects the current winning assignment (manual or automatic).
-
-- assignment_rules  
-  Stores all automatic categorization rules (assignment, priority, source filters, description substring filters, amount ranges).  
-  These rules define the matching logic used by the assignment engine.
-
-- transaction_assignments  
-  Audit log of all assignment events.  
-  Contains `{transaction_id, assignment, type (manual|auto), timestamp}`.  
-  Manual assignments always override automatic rules and can never be replaced.
-
-- rule_matches  
-  Materialized table storing every rule-to-transaction match `{rule_id, txn_id, priority, assignment}`.  
-  Supports efficient winner selection and incremental updates when rules are created, edited, or deleted.
-
-- google_merchant_types  
-  Cache of semantic merchant lookups via the Google Places API.  
-  One document per *unique transaction description*.  
-  Fields include:  
-  • description (string, bank-provided)  
-  • types (array of filtered Google semantic types)  
-  • place_id (Google Places identifier)  
-  • status ("ok", "not_found", "ambiguous", "error")  
-  • updated_at (timestamp)  
-  This cache prevents repeated paid API calls and enables semantic rule generation.
-
-
 ---
 
-## Mongo Collection Details
-
-This project uses several MongoDB collections to support ingestion, normalization, rule-based assignment, and merchant-type enrichment. Below is a detailed description of each collection and its schema.
+## Mongo Collections
 
 ### transactions
-Stores all normalized financial transactions imported from CSVs.  
-Each record is uniquely identified by a synthetic `id` generated from date, source, description, and amount.
-
-Fields:
-- id : unique string identifier  
-- date : datetime  
-- source : string (bmo, citi, chase, paypal, etc.)  
-- description : string (raw bank description)  
-- amount : float  
-- type : "Credit" or "Debit"  
-- assignment : string (manual or winning auto-assignment)  
-- action, symbol, quantity, price : optional fields for Schwab trade data
-
-### assignment_rules
-Defines automatic categorization rules.  
-Rules are applied to every transaction based on source, description substring logic, and amount ranges.
-
+Normalized financial transactions.  
 Fields:
 - id  
+- date  
+- source  
+- description  
+- amount  
+- type  
+- assignment  
+- google_primary_type (computed in API, not stored)  
+- trade fields for Schwab (optional)
+
+### assignment_rules
+Automatic categorization rules with:
 - assignment  
 - priority  
-- source (comma-separated list of allowed sources or empty string for “any”)  
-- description (substring OR/AND logic, e.g. "amazon|amzn" or "kwik,trip")  
+- source filters  
+- description substring filters  
 - min_amount  
 - max_amount  
 
 ### transaction_assignments
-Audit log of all assignment events.  
-Stores both manual and automatic assignments.
-
-Fields:
-- id : transaction id  
+Audit log with:
+- id  
 - assignment  
-- type : "manual" or "auto"  
-- timestamp
+- type = manual | auto  
+- timestamp  
 
-Manual assignments always override automatic rules.
+Manual assignments override auto-assignment.
 
 ### rule_matches
-Materialized table storing all rule-to-transaction matches.  
-Used to efficiently compute winning rule for each transaction.
+Materialized table of all rule → transaction matches.  
+Used for:
+- incremental rule-add  
+- incremental delete/edit  
+- fast-path winner selection
 
 Fields:
 - rule_id  
@@ -145,110 +107,101 @@ Fields:
 - priority  
 - assignment  
 
-This table is fully rebuilt when rules change.
-
 ### google_merchant_types
-Stores the results of Google Places merchant-type lookups for unique transaction descriptions.  
-This provides semantic enrichment for rule creation and automated categorization.
+Semantic merchant lookup cache (via Google Places API).
 
 Fields:
-- description : raw bank description  
-- types : array of Google semantic types (filtered to supported ontology)  
-- place_id : Google Places identifier  
-- status : "ok" (successful lookup), "not_found", "ambiguous", or "error"  
-- updated_at : timestamp of last lookup  
+- description_key  
+- google_types  
+- google_raw_types  
+- google_primary_type  
+- google_place_id  
+- google_lookup_status (“ok”, “not_found”, etc.)  
+- google_last_checked  
 
-This collection acts as a cache to prevent repeated paid API lookups.
+### google_type_mappings
+Curated mapping of Google semantic types → Financials Expense.* categories.
+
+Fields:
+- google_type  
+- expense_assignment  
+- priority  
+
+This is the ontology used by merchant-type enrichment.
 
 ---
 
 ## Google Merchant-Type Enrichment
 
-Financial transaction descriptions from banks are often opaque or non-semantic (e.g. “KWIK TRIP 123”, “SQ *JOES COFFEE”). To support more accurate auto-assignment rules, the system integrates with the Google Places API to map raw descriptions into semantic merchant categories.
+Merchant-type enrichment resolves raw bank descriptions into semantic Google categories.
 
-### Enrichment Workflow
+The workflow:
+1. Normalize description → description_key  
+2. Lookup from google_merchant_types  
+3. If cached, reuse  
+4. If missing and --live passed, query Google Places  
+5. Filter raw types using google_type_mappings  
+6. Store: filtered types, raw types, place_id, lookup status, primary type  
+7. Primary type is a single best semantic label based on priority score
 
-1. Extract unique transaction descriptions from MongoDB, filtered by optional flags (`--source`, `--year`, `--description`).  
-2. For each description:  
-   - Check google_merchant_types for cached lookup results.  
-   - If status is "ok", reuse the stored types.  
-   - If no cached entry exists, and live mode is enabled, perform a Google Places API searchText lookup.  
-3. Filter returned Google types against the project's curated ontology (from google_types_to_expenses.csv).  
-4. Store the result in google_merchant_types with status, types, and place_id.  
+---
 
-This process ensures:
-- No repeated paid requests  
-- Transparent caching  
-- Full cost visibility before any charge is incurred  
-- Safe dry-run mode  
-- Reproducibility for all future runs  
+## Primary Google Type in Dashboard
 
-### Enrichment Script
+The dashboard now exposes the merchant's primary Google semantic type.
 
-The enrichment process is driven by:
+- A new table column “Google Type” appears in Transactions  
+- It is loaded from google_merchant_types  
+- It is never stored in transactions  
+- It is computed dynamically in api_transactions.py via get_primary_types_for_descriptions  
+
+This greatly improves debugging of rule behavior.
+
+---
+
+## Assignment Engine Integration
+
+The assignment engine (assign_rules.py) now incorporates merchant primary types in all paths:
+
+- new transaction ingestion  
+- incremental rule creation  
+- incremental rule deletion  
+- incremental rule update  
+- full rebuild (slow path)  
+- fast path (winner selection)
+
+Implementation details:
+- Primary type is appended to the description before rule matching  
+- Matching continues to use substring logic (source, description, amount)  
+- Rules may match against semantic types (e.g., “restaurant”, “grocery”)  
+
+Helper used:
+get_primary_types_for_descriptions in google_types.py
+
+This helper returns a map:
+    normalized_description → primary Google type (or empty)
+
+---
+
+## Enrichment Script
 
 financials/scripts/get_google_types.py
 
-It supports:
-- --source : restrict by account source  
-- --year : restrict by transaction year  
-- --description : case-insensitive substring filter  
-- --all : process all transactions  
-- --live : enable real Google API calls (with confirmation prompt)  
+Capabilities:
+- --source  
+- --year  
+- --description  
+- --all  
+- --live (enables paid Google lookups)  
+- Dry-run with full cost preview  
+- Cached lookups always reused  
 
-Without `--live`, the script performs only cache lookups.
-
-Example usage:
-poetry run python -m financials.scripts.get_google_types --source BMO --year 2025 --description "KWIK TRIP" --live
-
-### Google Places API Integration
-
-The system uses:
-POST https://places.googleapis.com/v1/places:searchText
-
-The returned merchant types are mapped only if they appear in the curated Google-type ontology defined in:
-
-financials/cfg/google_types_to_expenses.csv
-
-This prevents noise from generic Google categories and ensures consistent mapping to Financials assignments.
-
-### Automatic Rule Seeding
-
-Rules can be bulk-created from the type-to-expense mapping:
-
-poetry run python -m financials.scripts.update_indexes --rules
-
-This installs assignment_rules with:
-- priority = 2  
-- description = google merchant type  
-- assignment = mapped Expense.* category  
-
-These rules provide broad, semantically accurate auto-assignment coverage without manual creation.
-
-### Benefits
-
-- Stronger, more semantic auto-assignment  
-- No brittle substring matching for most merchants  
-- Very low cost due to caching and controlled live lookups  
-- Full transparency and safety before any paid API usage  
-- Easy extensibility for new merchant categories  
-- Reproducible enrichment data for consistent long-term reporting  
+Example:
+    poetry run python -m financials.scripts.get_google_types --year 2025 --live
 
 ---
 
-## 🧩 Conventions
-
-- drive.py → Google Drive API access only  
-- calculator.py → FinancialsCalculator handles normalization + persistence  
-- db.py → manages MongoDB client connections (`db_module.db["transactions"]`)  
-- main_ingest.py → CLI entry for background ingestion (`poetry run python main_ingest.py`)  
-- web.py → Flask app entry point with dashboard and JSON API routes  
-- templates/ → dashboard front-end (`dashboard.html`, `styles.css`, `code.js`)  
-- scripts/delete_entries.py → deletes transactions by source (`--source bmo`, etc.)
-
----
-
-## ⚙️ Setup
+## Setup
 
 Requires Python 3.12+ and Poetry.
 
@@ -257,129 +210,58 @@ Requires Python 3.12+ and Poetry.
 
 ---
 
-## 🔑 Credentials
+## Credentials
 
-Provide Google Drive OAuth credentials under json/, ignored by Git.  
-On first run, token files (e.g. token.drive.pickle) are created automatically.  
-Do not commit these credentials.
+Google Drive OAuth credentials stored under json/.  
+Token files created automatically.
 
 ---
 
-## 🧪 Running Tests
+## Tests
 
     poetry run pytest -v
 
-Tests cover normalization for BMO, Citi, Chase, PayPal, Capitol One, Schwab, and Checks.
-
 ---
 
-## 🚀 Running the App
+## Running the App
 
     poetry run flask --app financials/web.py run
 
-Then open:  
+Open:  
 http://127.0.0.1:5000/dashboard
 
 ---
 
-## 🧲 Data Ingestion
-
-You can import normalized data directly into MongoDB.
+## Data Ingestion
 
     poetry run python main_ingest.py
 
-### What Happens
-1. Download and normalize CSVs from Google Drive  
-2. Pre-load Checks-YEAR.csv (if present)  
-3. Enrich BMO transactions with check metadata  
-4. Generate transaction IDs  
-5. Insert new rows into MongoDB  
-
-Schema:  
-date, source, description, amount, type, assignment, [action, symbol, quantity, price]
-
 ---
 
-## 🧮 Normalization Details
-
-### BMO + Checks Integration
-- Replace DDA CHECK rows with payee and assignment from Checks file  
-- Automatically prefix assignments with Expense.*  
-- Skip non-matching rows  
-
-Example:
-
-POSTED DATE | DESCRIPTION | AMOUNT | TRANSACTION REF | TYPE → description | assignment  
-08/09/2024 | DDA CHECK | -26.34 | 9502 | Debit → St Christopher CP | Expense.Charity.Church
-
-### Schwab
-- Handles stock trades  
-- Parses price, quantity, symbol  
-- Produces credit/debit type automatically
-
-### Checks
-- Loaded as mapping {check_no : {payee, assignment}}  
-- Not stored directly in Mongo  
-
----
-
-## 🧰 Utility Scripts
+## Utility Scripts
 
 ### Delete Entries
     poetry run python -m financials.scripts.delete_entries --source bmo
 
-Removes all transactions for a given source.
+---
+
+## Dashboard and API
+
+### /api/transactions
+Now returns:
+- google_primary_type column  
+- semantic debugging info  
 
 ---
 
-## 🌐 Dashboard and API
+## Roadmap
 
-### Dashboard
-
-- Multi-year filtering  
-- DataTables backend  
-- Column filtering  
-- Shift-click multi-column sort  
-- Modal UI for rules  
-
-### Backend API
-
-- /api/transactions  
-- Optional year filtering  
-- JSON output  
+- Visualization layer  
+- Assignment breakdowns  
+- More semantic rules  
+- Google-type based rule generator UI  
 
 ---
 
-## 🗺️ Roadmap
-
-### Visualization
-- Add summary endpoint  
-- Add spending charts  
-- Add assignment breakdowns  
-
-### Data Ingestion
-- Multi-year support (done)  
-- Schwab + Checks support (done)  
-- Manual categorization (done)  
-- Rule UI (done)  
-- Auto-assignment engine (done)
-
-### Assignment Engine
-- Manual > automatic precedence  
-- Priority-based rule selection  
-- Materialized rule_matches  
-- Auto + manual auditing
-
-### DevOps
-- Optional GitHub Actions
-
----
-
-## 📜 License
-TBD (MIT or Apache 2.0)
-
----
-
-## 🤝 Contributing
-Pull requests are welcome.  
-This is an evolving personal project under the CohortInsights organization.
+## License
+TBD

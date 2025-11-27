@@ -1,4 +1,5 @@
 from dotenv import load_dotenv
+
 load_dotenv()
 
 import logging
@@ -23,6 +24,37 @@ ESTIMATED_COST_PER_MERCHANT = 19.0 / 1000.0
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+# ----------------------------------------------------------------------
+# GOOGLE PRIMARY TYPE HELPER
+# ----------------------------------------------------------------------
+
+def get_primary_types_for_descriptions(descriptions):
+    """
+    Lightweight helper:
+    Return mapping normalized_desc_key → google_primary_type or None.
+    Uses only cached merchant entries; no live Google calls.
+    """
+    if not descriptions:
+        return {}
+
+    from financials.scripts.google_types import _normalize_description, MERCHANT_COLL
+    db = db_module.db
+    merchant = db[MERCHANT_COLL]
+
+    normalized = [_normalize_description(d) for d in descriptions]
+    keys = sorted(set(normalized))
+
+    cursor = merchant.find(
+        {"description_key": {"$in": keys}},
+        {"_id": 0, "description_key": 1, "google_primary_type": 1}
+    )
+
+    result = {k: None for k in keys}
+    for rec in cursor:
+        result[rec["description_key"]] = rec.get("google_primary_type")
+
+    return result
+
 
 def get_types_for_descriptions(descriptions, live=False, interactive=False, force=False):
     """
