@@ -1,200 +1,176 @@
 // --- Global variable for DataTable reference ---
 var transactionTable = null;
 
+// --- GLOBAL listener for ruleSaved events (fires even if tab never switches) ---
+window.addEventListener("ruleSaved", () => {
+  console.log("🔔 ruleSaved received globally — reloading transactions NOW");
+  if (typeof loadTransactions === "function") {
+    loadTransactions();
+  }
+});
+
 // --- Debounce utility (150ms) ---
 function debounce(fn, delay = 150) {
-    let timer = null;
-    return function (...args) {
-        clearTimeout(timer);
-        timer = setTimeout(() => fn.apply(this, args), delay);
-    };
+  let timer = null;
+  return function (...args) {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn.apply(this, args), delay);
+  };
 }
 
 // --- Collect selected years from the checkbox group ---
 function getSelectedYears() {
-    return Array.from(document.querySelectorAll('#yearSelector input[type=checkbox]:checked'))
-                .map(cb => cb.value);
+  return Array.from(
+    document.querySelectorAll('#yearSelector input[type=checkbox]:checked')
+  ).map(cb => cb.value);
 }
 
 // --- Fetch and display transactions for selected years ---
 function loadTransactions() {
-    const years = getSelectedYears();
-    const param = years.join(',');
-    const url = `/api/transactions?years=${param}`;
-    console.log("📡 Fetching:", url);
+  const years = getSelectedYears();
+  const param = years.join(',');
+  const url = `/api/transactions?years=${param}`;
+  console.log("🔁 loadTransactions() called; URL =", url);
 
-    fetch(url)
-        .then(res => res.json())
-        .then(data => {
-            console.log(`✅ Loaded ${data.length} transactions`);
+  fetch(url, { cache: "no-store" })
+    .then(res => res.json())
+    .then(data => {
+      console.log(`✅ Loaded ${data.length} transactions`);
 
-            if (transactionTable) {
-                // 🆕 Preserve the current page before clearing
-                const currentPage = transactionTable.page();
+      if (transactionTable) {
+        const currentPage = transactionTable.page();
 
-                transactionTable.clear().rows.add(data).draw(false);
+        transactionTable.clear().rows.add(data).draw(false);
 
-                // 🆕 Restore the previous page
-                transactionTable.page(currentPage).draw(false);
+        transactionTable.page(currentPage).draw(false);
 
-                console.log("♻️ Table reloaded with new data (page preserved)");
-            } else {
-                buildTransactionTable(data);
-            }
-        })
-        .catch(err => {
-            console.error("❌ Error loading transactions:", err);
-        });
+        console.log("♻️ Table reloaded with new data (page preserved)");
+      } else {
+        buildTransactionTable(data);
+      }
+    })
+    .catch(err => {
+      console.error("❌ Error loading transactions:", err);
+    });
 }
 
 // --- Initialize the DataTable for the first time ---
 function buildTransactionTable(data) {
-    transactionTable = $('#transactions').DataTable({
-        data: data,
-        columns: [
-            { data: 'date', title: 'Date' },
-            { data: 'source', title: 'Source' },
-            { data: 'description', title: 'Description' },
-            { data: 'amount', title: 'Amount', render: $.fn.dataTable.render.number(',', '.', 2, '$') },
-            { data: 'type', title: 'Type' },
-            { data: 'assignment', title: 'Assignment', defaultContent: 'Unspecified' },
-            {
-                data: null,
-                title: 'Action',
-                render: function (data, type, row) {
-                    return `<button class="assign-btn" data-id="${row.id}">Assign</button>`;
-                }
-            }
-        ],
-        order: [[0, 'desc']],
-        scrollY: '70vh',
-        scrollCollapse: true,
-        paging: true,
-        initComplete: addColumnFilters
-    });
+  transactionTable = $('#transactions').DataTable({
+    data: data,
+    columns: [
+      { data: 'date', title: 'Date' },
+      { data: 'source', title: 'Source' },
+      { data: 'description', title: 'Description' },
+      { data: 'amount', title: 'Amount', render: $.fn.dataTable.render.number(',', '.', 2, '$') },
+      { data: 'type', title: 'Type' },
+      { data: 'assignment', title: 'Assignment', defaultContent: 'Unspecified' },
 
-    // Handle manual assignment button clicks
-    $('#transactions tbody').on('click', 'button.assign-btn', onAssignClick);
+      // ✅ NEW COLUMN — shows the Google primary merchant type
+      { data: 'google_primary_type', title: 'Primary Type', defaultContent: '' },
+
+      {
+        data: null,
+        title: 'Action',
+        render: function (data, type, row) {
+          return `<button class="assign-btn" data-id="${row.id}">Assign</button>`;
+        }
+      }
+    ],
+    order: [[0, 'desc']],
+    scrollY: '70vh',
+    scrollCollapse: true,
+    paging: true,
+    initComplete: addColumnFilters
+  });
+
+  $('#transactions tbody').on('click', 'button.assign-btn', onAssignClick);
 }
 
 // --- Add footer text filters for each column ---
 function addColumnFilters() {
-    const api = this.api();
+  const api = this.api();
 
-    api.columns().every(function () {
-        const column = this;
-        const headerText = $(column.header()).text();
+  api.columns().every(function () {
+    const column = this;
+    const headerText = $(column.header()).text();
 
-        const input = document.createElement("input");
-        input.placeholder = "Filter " + headerText;
-        input.style.width = "90%";
-        input.style.fontSize = "12px";
-        input.style.padding = "2px 4px";
+    const input = document.createElement("input");
+    input.placeholder = "Filter " + headerText;
+    input.style.width = "90%";
+    input.style.fontSize = "12px";
+    input.style.padding = "2px 4px";
 
-        $(column.footer()).empty().append(input);
+    $(column.footer()).empty().append(input);
 
-        // --- Enhanced filtering logic with debounce ---
-        $(input).on(
-            'keyup change clear',
-            debounce(function () {
-                let raw = this.value.trim();
+    $(input).on(
+      'keyup change clear',
+      debounce(function () {
+        let raw = this.value.trim();
 
-                if (raw === "") {
-                    column.search("", true, false).draw();
-                    return;
-                }
+        if (raw === "") {
+          column.search("", true, false).draw();
+          return;
+        }
 
-                // Break apart tokens: includes + excludes
-                let parts = raw.split(",")
-                               .map(s => s.trim())
-                               .filter(s => s !== "");
+        let parts = raw.split(",")
+          .map(s => s.trim())
+          .filter(s => s !== "");
 
-                let include = parts.filter(p => !p.startsWith("!"));
-                let exclude = parts.filter(p => p.startsWith("!"))
-                                   .map(p => p.substring(1));
+        let include = parts.filter(p => !p.startsWith("!"));
+        let exclude = parts.filter(p => p.startsWith("!"))
+          .map(p => p.substring(1));
 
-                // Build regex pattern
-                let pattern = "";
+        let pattern = "";
 
-                // Negative lookahead for all excludes
-                exclude.forEach(ex => {
-                    pattern += `(?!.*${ex})`;
-                });
+        exclude.forEach(ex => {
+          pattern += `(?!.*${ex})`;
+        });
 
-                // OR-group for inclusion tokens
-                if (include.length > 0) {
-                    pattern += `(${include.join("|")})`;
-                } else if (exclude.length > 0) {
-                    // Only exclusions? Match everything except them
-                    pattern += `.*`;
-                }
+        if (include.length > 0) {
+          pattern += `(${include.join("|")})`;
+        } else if (exclude.length > 0) {
+          pattern += `.*`;
+        }
 
-                column.search(pattern, true, false).draw();
-            }, 150)
-        );
-    });
+        column.search(pattern, true, false).draw();
+      }, 150)
+    );
+  });
 }
 
-// --- When user clicks "Assign" on a row ---
+// --- When user clicks "Assign" on a row (now creates a rule instead) ---
 function onAssignClick() {
-    const id = $(this).data('id');
-    const newAssign = prompt("Enter new assignment (e.g. Expense.Food.Restaurant):");
-    if (!newAssign) return;
+  const rowData = transactionTable.row($(this).closest('tr')).data();
+  if (!rowData) return;
 
-    fetch('/assign_transaction', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ transaction_id: id, assignment: newAssign })
-    })
-    .then(res => res.json())
-    .then(resp => {
-        if (resp.success) {
-            console.log(`✅ Transaction ${id} updated to ${newAssign}`);
-            loadTransactions(); // reload table
-        } else {
-            alert("⚠️ Update failed: " + (resp.message || 'Unknown error'));
-        }
-    })
-    .catch(err => {
-        console.error("❌ Error assigning transaction:", err);
-    });
+  const form = document.getElementById("addRuleForm");
+  const modalEl = document.getElementById("addRuleModal");
+  const modal = new bootstrap.Modal(modalEl);
+
+  form.reset();
+  form.priority.value = 3;
+  form.source.value = "";
+  form.description.value = rowData.description;
+  form.min_amount.value = "";
+  form.max_amount.value = "";
+  form.assignment.value = "";
+
+  window.editingRuleId = null;
+  document.getElementById("addRuleLabel").textContent = "Add Rule From Transaction";
+
+  modal.show();
 }
 
 // --- Watch year checkbox changes to reload table ---
 function attachYearCheckboxListeners() {
-    const checkboxes = document.querySelectorAll('#yearSelector input[type=checkbox]');
-    checkboxes.forEach(cb => cb.addEventListener('change', loadTransactions));
-}
-
-// --- 🔁 Detect when Transactions tab becomes active and refresh if rules changed ---
-function attachTabRefreshListener() {
-  // Works for both <a> and <button> tab toggles
-  const allTabToggles = document.querySelectorAll('[data-bs-toggle="tab"]');
-
-  allTabToggles.forEach(tab => {
-    tab.addEventListener('shown.bs.tab', event => {
-      const targetId = event.target.getAttribute('data-bs-target');
-      if (targetId === '#tab-transactions' && localStorage.getItem('transactionsNeedRefresh') === 'true') {
-        console.log('🔁 Reloading transactions after rule changes...');
-        loadTransactions();
-        localStorage.removeItem('transactionsNeedRefresh');
-      }
-    });
-  });
-
-  // Handle the edge case where Transactions is already active on load
-  const activePane = document.querySelector('#tab-transactions.active');
-  if (activePane && localStorage.getItem('transactionsNeedRefresh') === 'true') {
-    console.log('🔁 Reloading transactions after rule changes (active on load)...');
-    loadTransactions();
-    localStorage.removeItem('transactionsNeedRefresh');
-  }
+  const checkboxes = document.querySelectorAll('#yearSelector input[type=checkbox]');
+  checkboxes.forEach(cb => cb.addEventListener('change', loadTransactions));
 }
 
 // --- Module entry point called from code.js ---
 function initTransactions() {
-    console.log("🚀 Initializing transaction dashboard");
-    attachYearCheckboxListeners();
-    attachTabRefreshListener();   // 🔁 new listener added
-    loadTransactions();
+  console.log("🚀 Initializing transaction dashboard");
+  attachYearCheckboxListeners();
+  loadTransactions();
 }
