@@ -11,7 +11,9 @@ from io import BytesIO, StringIO
 import hashlib
 
 import pandas as pd
-from pymongo.errors import DuplicateKeyError
+
+# 🔹 Added import
+from financials.utils.helpers import normalize_description
 
 
 class FinancialsCalculator:
@@ -166,21 +168,27 @@ class FinancialsCalculator:
         if s == "bmo":
             return self._normalize_bmo(df, source)
         if s == "citi":
-            return self._normalize_citi(df, source)
-        if s == "capitolone":
-            return self._normalize_capitol_one(df, source)
-        if s == "discover":
-            return self._normalize_discover(df, source)
-        if s == "grants":
-            return self._normalize_grants(df, source)
-        if s == "paypal":
-            return self._normalize_paypal(df, source)
-        if s == "schwab":
-            return self._normalize_schwab(df, source)
-        if s == "checks":
-            # Already handled upstream; skip redundant normalization
+            out = self._normalize_citi(df, source)
+        elif s == "capitolone":
+            out = self._normalize_capitol_one(df, source)
+        elif s == "discover":
+            out = self._normalize_discover(df, source)
+        elif s == "grants":
+            out = self._normalize_grants(df, source)
+        elif s == "paypal":
+            out = self._normalize_paypal(df, source)
+        elif s == "schwab":
+            out = self._normalize_schwab(df, source)
+        elif s == "checks":
             return pd.DataFrame(columns=["date", "source", "description", "amount", "type", "assignment"])
-        raise ValueError(f"No normalizer implemented for source {source}")
+        else:
+            raise ValueError(f"No normalizer implemented for source {source}")
+
+        # 🔹 Add normalized_description for all non-BMO normalizers
+        if "description" in out.columns:
+            out["normalized_description"] = out["description"].astype(str).apply(normalize_description)
+
+        return out
 
     # --------------------------
     # Transaction IDs + Persistence
@@ -313,7 +321,6 @@ class FinancialsCalculator:
         #  ENRICHMENT USING CHECKS-YEAR.CSV
         # =====================================================================
         if check_map:
-            # Identify column providing check numbers
             ref_candidates = []
             for col in ["TRANSACTION REFERENCE NUMBER", "FI TRANSACTION REFERENCE"]:
                 if col in df.columns:
@@ -337,12 +344,7 @@ class FinancialsCalculator:
                 out["description"] = enriched_desc
                 out["assignment"] = enriched_assign
 
-                # =================================================================
-                #  NEW FALLBACK RULE:
-                #  If DESCRIPTION == "DDA CHECK", assignment is blank, and we know
-                #  the check number (ref), then append the check number.
-                #  This improves descriptions for checks missing from Checks-YEAR.csv.
-                # =================================================================
+                # fallback rule
                 fallback_desc = []
                 for desc, ref, assign in zip(out["description"], ref_nums, out["assignment"]):
                     if (
@@ -357,11 +359,14 @@ class FinancialsCalculator:
 
                 out["description"] = fallback_desc
 
+        # 🔹 Add normalized_description for BMO
+        out["normalized_description"] = out["description"].astype(str).apply(normalize_description)
+
         # =====================================================================
         #  RETURN NORMALIZED COLUMNS
         # =====================================================================
         return out[
-            ["date", "source", "description", "amount", "type", "assignment"]
+            ["date", "source", "description", "normalized_description", "amount", "type", "assignment"]
         ]
 
     def _normalize_schwab(self, raw: pd.DataFrame, source: str) -> pd.DataFrame:
@@ -421,37 +426,22 @@ class FinancialsCalculator:
         return out[["date", "source", "description", "amount", "type"]]
 
     def _normalize_grants(self, df: pd.DataFrame, source: str) -> pd.DataFrame:
-        """
-        Normalize company matching-grant CSV.
-        Expected columns:
-          - Requested Date
-          - Charity Name
-          - Amount
-          - Submitted By
-          - Status (ignored except for filtering Approved)
-        """
-
-        # ---- Filter to only "Approved" rows if column exists ----
         if "Status" in df.columns:
             mask = df["Status"].astype(str).str.lower() == "approved"
             df = df.loc[mask].copy()
 
         out = pd.DataFrame()
 
-        # ---- Date ----
         if "Requested Date" not in df.columns:
             raise ValueError("Grants CSV missing 'Requested Date' column.")
         out["date"] = pd.to_datetime(df["Requested Date"], errors="coerce").dt.date
 
-        # ---- Source ----
         out["source"] = source
 
-        # ---- Description = Charity Name ----
         if "Charity Name" not in df.columns:
             raise ValueError("Grants CSV missing 'Charity Name' column.")
         out["description"] = df["Charity Name"].astype(str)
 
-        # ---- Amount → convert to negative ----
         if "Amount" not in df.columns:
             raise ValueError("Grants CSV missing 'Amount' column.")
         amounts = (
@@ -461,12 +451,10 @@ class FinancialsCalculator:
         )
         out["amount"] = -pd.to_numeric(amounts, errors="coerce").abs()
 
-        # ---- Type = Submitted By ----
         if "Submitted By" not in df.columns:
             raise ValueError("Grants CSV missing 'Submitted By' column.")
         out["type"] = df["Submitted By"].astype(str)
 
-        # ---- Assignment blank ----
         out["assignment"] = ""
 
         return out[["date", "source", "description", "amount", "type", "assignment"]]
@@ -482,7 +470,6 @@ class FinancialsCalculator:
         amt_col = "Amount" if "Amount" in df.columns else df.columns[2]
         amt = pd.to_numeric(df[amt_col], errors="coerce")
 
-        # --- Discover fix: purchases should be negative ---
         category_col = df["Category"].astype(str).str.lower() if "Category" in df.columns else pd.Series("",
                                                                                                          index=df.index)
 
@@ -493,15 +480,13 @@ class FinancialsCalculator:
             if pd.isna(a):
                 fixed_amount.append(a)
             else:
-                # Positive amounts are normally purchases → make negative
                 if a > 0 and not any(marker in cat for marker in credit_markers):
                     fixed_amount.append(-abs(a))
                 else:
-                    fixed_amount.append(abs(a))  # credits remain positive
+                    fixed_amount.append(abs(a))
 
         out["amount"] = fixed_amount
 
-        # Credit/debit label
         out["type"] = out["amount"].apply(lambda x: "Credit" if x > 0 else "Debit")
 
         return out[["date", "source", "description", "amount", "type"]]
@@ -509,7 +494,6 @@ class FinancialsCalculator:
     def _normalize_paypal(self, df: pd.DataFrame, source: str) -> pd.DataFrame:
         out = pd.DataFrame()
 
-        # -------- Date --------
         if "Date" in df.columns:
             out["date"] = pd.to_datetime(df["Date"], errors="coerce").dt.date
         elif 0 in df.columns:
@@ -517,7 +501,6 @@ class FinancialsCalculator:
         else:
             raise ValueError("No date column found in PayPal CSV")
 
-        # -------- Description --------
         if "Name" in df.columns:
             out["description"] = df["Name"].astype(str)
         elif "Description" in df.columns:
@@ -527,7 +510,6 @@ class FinancialsCalculator:
         else:
             raise ValueError("No description column found in PayPal CSV")
 
-        # -------- Status --------
         if "Status" in df.columns:
             status = df["Status"].astype(str).str.lower()
         elif 5 in df.columns:
@@ -535,7 +517,6 @@ class FinancialsCalculator:
         else:
             raise ValueError("No status column found in PayPal CSV")
 
-        # -------- Raw Amount (Gross) --------
         if "Gross" in df.columns:
             raw_amount = pd.to_numeric(df["Gross"], errors="coerce")
         elif "Amount" in df.columns:
@@ -545,7 +526,6 @@ class FinancialsCalculator:
         else:
             raise ValueError("No amount column found in PayPal CSV")
 
-        # -------- Balance Impact (authoritative for sign when present) --------
         balance_impact = None
         if "Balance Impact" in df.columns:
             balance_impact = df["Balance Impact"].astype(str).str.lower()
@@ -566,16 +546,13 @@ class FinancialsCalculator:
                     elif "credit" in impact:
                         fixed_amount.append(abs(amt))
                     else:
-                        # Memo or unknown → keep original sign
                         fixed_amount.append(amt)
             amount = pd.Series(fixed_amount, index=df.index)
 
         out["amount"] = amount
 
-        # -------- Drop non-final / noisy transactions --------
         mask_completed = (status == "completed")
 
-        # Type column (flexible column position fallback)
         if "Type" in df.columns:
             type_col = df["Type"].astype(str).str.lower()
         elif 4 in df.columns:
@@ -590,7 +567,6 @@ class FinancialsCalculator:
             | type_col.str.contains("currency conversion")
         )
 
-        # New: drop Memo balance-impact rows (non-cashflow metadata)
         if balance_impact is not None:
             mask_memo = balance_impact.str.contains("memo")
         else:
@@ -599,10 +575,8 @@ class FinancialsCalculator:
         final_mask = mask_completed & (~mask_noise) & (~mask_memo)
         out = out.loc[final_mask].copy()
 
-        # -------- Source --------
         out["source"] = source
 
-        # -------- Type: Credit/Debit --------
         out["type"] = out["amount"].apply(lambda x: "Credit" if x > 0 else "Debit")
 
         return out[["date", "source", "description", "amount", "type"]]
