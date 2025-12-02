@@ -11,6 +11,7 @@ from urllib import request, error
 from pymongo import UpdateOne
 
 from financials import db as db_module
+from financials.utils.helpers import normalize_description
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -37,21 +38,20 @@ def get_primary_types_for_descriptions(descriptions):
     if not descriptions:
         return {}
 
-    from financials.scripts.google_types import _normalize_description, MERCHANT_COLL
     db = db_module.db
     merchant = db[MERCHANT_COLL]
 
-    normalized = [_normalize_description(d) for d in descriptions]
+    normalized = [normalize_description(d) for d in descriptions]
     keys = sorted(set(normalized))
 
     cursor = merchant.find(
-        {"description_key": {"$in": keys}},
-        {"_id": 0, "description_key": 1, "google_primary_type": 1}
+        {"normalized_description": {"$in": keys}},
+        {"_id": 0, "normalized_description": 1, "google_primary_type": 1}
     )
 
     result = {k: None for k in keys}
     for rec in cursor:
-        result[rec["description_key"]] = rec.get("google_primary_type")
+        result[rec["normalized_description"]] = rec.get("google_primary_type")
 
     return result
 
@@ -79,7 +79,7 @@ def get_types_for_descriptions(descriptions, live=False, interactive=False, forc
 
     Returns:
         dict[str, list[str]]:
-            Maps normalized description_key → list of filtered Google types.
+            Maps normalized normalized_description → list of filtered Google types.
             For non-live mode, missing merchants return an empty list.
     """
     if not descriptions:
@@ -92,7 +92,7 @@ def get_types_for_descriptions(descriptions, live=False, interactive=False, forc
     type_map_coll = db["google_type_mappings"]
 
     # Normalize & dedupe
-    normalized = [_normalize_description(d) for d in descriptions]
+    normalized = [normalize_description(d) for d in descriptions]
     unique_desc = sorted(set(normalized))
 
     logger.info(f"[google_types] Processing {len(unique_desc)} unique descriptions")
@@ -101,9 +101,9 @@ def get_types_for_descriptions(descriptions, live=False, interactive=False, forc
 
     # Load cached merchant records
     cached_records = {
-        record["description_key"]: record
+        record["normalized_description"]: record
         for record in merchant.find(
-            {"description_key": {"$in": unique_desc}},
+            {"normalized_description": {"$in": unique_desc}},
             {"_id": 0}
         )
     }
@@ -179,10 +179,10 @@ def get_types_for_descriptions(descriptions, live=False, interactive=False, forc
 
         ops.append(
             UpdateOne(
-                {"description_key": desc},
+                {"normalized_description": desc},
                 {
                     "$set": {
-                        "description_key": desc,
+                        "normalized_description": desc,
                         "google_place_id": place_id,
                         "google_types": filtered,
                         "google_raw_types": raw_types,
@@ -226,13 +226,13 @@ def get_types_for_transactions(txns, apply=False, live=False, interactive=False,
     if not apply:
         out = {}
         for txn in txns:
-            desc_key = _normalize_description(txn["description"])
+            desc_key = normalize_description(txn["description"])
             out[txn["id"]] = merchant_map.get(desc_key, [])
         return out
 
     # apply=True
     for txn in txns:
-        desc_key = _normalize_description(txn["description"])
+        desc_key = normalize_description(txn["description"])
         gtypes = merchant_map.get(desc_key, [])
         _apply_tokens_to_transaction(txn, gtypes)
 
@@ -284,11 +284,7 @@ def get_types_for_query(query_dict, projection=None, apply=False,
 # ---------------------------------------------------------------------------
 
 def _ensure_merchant_index(merchant_coll):
-    merchant_coll.create_index("description_key", unique=True)
-
-
-def _normalize_description(desc):
-    return desc.upper().strip()
+    merchant_coll.create_index("normalized_description", unique=True)
 
 
 def _prompt_for_live_confirmation(needs_lookup):
