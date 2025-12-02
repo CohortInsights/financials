@@ -5,7 +5,7 @@ import numpy as np
 
 from financials import db as db_module
 from financials.web import app
-from financials.utils.google_types import _normalize_description
+from financials.utils.helpers import normalize_description
 
 
 def respond_with_format(df: pd.DataFrame, filename: str):
@@ -43,7 +43,7 @@ def attach_google_primary(df: pd.DataFrame) -> pd.DataFrame:
 
     # Normalize descriptions to match description_key format
     unique_keys = sorted(
-        set(_normalize_description(d) for d in df["description"].dropna())
+        set(normalize_description(d) for d in df["description"].dropna())
     )
 
     if not unique_keys:
@@ -63,7 +63,7 @@ def attach_google_primary(df: pd.DataFrame) -> pd.DataFrame:
     }
 
     df["google_primary_type"] = df["description"].apply(
-        lambda d: lookup.get(_normalize_description(d), "")
+        lambda d: lookup.get(normalize_description(d), "")
         if isinstance(d, str) else ""
     )
 
