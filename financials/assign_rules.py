@@ -22,8 +22,16 @@ logger = logging.getLogger(__name__)
 
 
 # ----------------------------------------------------------------------
-# GOOGLE PRIMARY TYPE HELPER
+# Helper: unified description key
 # ----------------------------------------------------------------------
+
+def _desc_key(txn: dict) -> str:
+    """
+    Unified lowercased key used for rule matching and primary_map lookup.
+    """
+    return (txn.get("normalized_description")
+            or txn.get("description")
+            or "").lower()
 
 
 # ----------------------------------------------------------------------
@@ -34,20 +42,12 @@ def assign_transactions_from_matches_bulk(txn_ids):
     """
     Given a list/set of auto-eligible transaction IDs, recompute their winning
     assignments based solely on the current state of rule_matches.
-
-    This function performs all Mongo operations in bulk for speed.
     """
     t0 = time.perf_counter()
 
-    # Normalize txn_ids
     if not txn_ids:
-        return {
-            "success": True,
-            "count": 0,
-            "updated": 0,
-            "unspecified": 0,
-            "winners": [],
-        }
+        return {"success": True, "count": 0, "updated": 0,
+                "unspecified": 0, "winners": []}
 
     if not isinstance(txn_ids, (list, tuple, set)):
         txn_ids = [txn_ids]
@@ -59,9 +59,6 @@ def assign_transactions_from_matches_bulk(txn_ids):
     tx_coll = db["transactions"]
 
     try:
-        # ------------------------------------------------------------------
-        # 1️⃣ Aggregation: determine top winners
-        # ------------------------------------------------------------------
         pipeline = [
             {"$match": {"txn_id": {"$in": txn_ids}}},
             {"$sort": {"txn_id": 1, "priority": -1}},
@@ -69,7 +66,7 @@ def assign_transactions_from_matches_bulk(txn_ids):
                 "_id": "$txn_id",
                 "rule_id": {"$first": "$rule_id"},
                 "priority": {"$first": "$priority"},
-                "assignment": {"$first": "$assignment"}
+                "assignment": {"$first": "$assignment"},
             }},
         ]
 
@@ -89,14 +86,10 @@ def assign_transactions_from_matches_bulk(txn_ids):
             for doc in agg_results
         ]
 
-        # ------------------------------------------------------------------
-        # 2️⃣ Remove old auto logs
-        # ------------------------------------------------------------------
+        # Remove old auto logs
         assignments_coll.delete_many({"id": {"$in": txn_ids}, "type": "auto"})
 
-        # ------------------------------------------------------------------
-        # 3️⃣ Insert auto logs only for winners
-        # ------------------------------------------------------------------
+        # Insert new logs
         if winner_txn_ids:
             now = datetime.utcnow()
             new_auto_logs = [
@@ -110,16 +103,18 @@ def assign_transactions_from_matches_bulk(txn_ids):
             ]
             assignments_coll.insert_many(new_auto_logs)
 
-        # ------------------------------------------------------------------
-        # 4️⃣ Bulk update transactions
-        # ------------------------------------------------------------------
+        # Update transactions
         bulk_ops = []
-
         for tid in winner_txn_ids:
-            bulk_ops.append(UpdateOne({"id": tid}, {"$set": {"assignment": winners[tid]}}))
-
+            bulk_ops.append(
+                UpdateOne({"id": tid},
+                          {"$set": {"assignment": winners[tid]}})
+            )
         for tid in loser_txn_ids:
-            bulk_ops.append(UpdateOne({"id": tid}, {"$set": {"assignment": "Unspecified"}}))
+            bulk_ops.append(
+                UpdateOne({"id": tid},
+                          {"$set": {"assignment": "Unspecified"}})
+            )
 
         if bulk_ops:
             tx_coll.bulk_write(bulk_ops)
@@ -143,10 +138,6 @@ def assign_transactions_from_matches_bulk(txn_ids):
 # ----------------------------------------------------------------------
 
 def clear_assignments() -> dict:
-    """
-    Clear all automatic assignments and rule_matches.
-    """
-    import time
     t0 = time.perf_counter()
     db = db_module.db
 
@@ -167,20 +158,14 @@ def clear_assignments() -> dict:
             reset_count = result.modified_count
 
         rm_del = rm.delete_many({})
-
         elapsed = time.perf_counter() - t0
-
-        logger.info(
-            "🧹 clear_assignments v3: auto_logs=%d, reset=%d, rule_matches=%d in %.3fs",
-            auto_del.deleted_count, reset_count, rm_del.deleted_count, elapsed
-        )
 
         return {
             "success": True,
             "auto_logs_deleted": auto_del.deleted_count,
             "assignments_reset": reset_count,
             "rule_matches_cleared": rm_del.deleted_count,
-            "elapsed_sec": elapsed
+            "elapsed_sec": elapsed,
         }
 
     except Exception as exc:
@@ -189,13 +174,10 @@ def clear_assignments() -> dict:
 
 
 # ----------------------------------------------------------------------
-# NEW TXN ASSIGNMENT (incremental)
+# NEW TRANSACTIONS
 # ----------------------------------------------------------------------
 
 def assign_new_transactions(new_ids: list[str]) -> dict:
-    """
-    Incrementally assign ONLY newly ingested transactions.
-    """
     if not new_ids:
         return {"success": True, "updated": 0}
 
@@ -204,27 +186,29 @@ def assign_new_transactions(new_ids: list[str]) -> dict:
     tx = db["transactions"]
     ta = db["transaction_assignments"]
 
-    # 1. Filter manual
-    manual_ids = set(ta.distinct("id", {"type": "manual", "id": {"$in": new_ids}}))
+    # Manual overrides remain untouched
+    manual_ids = set(
+        ta.distinct("id", {"type": "manual", "id": {"$in": new_ids}})
+    )
     auto_ids = [tid for tid in new_ids if tid not in manual_ids]
 
     if not auto_ids:
-        return {"success": True, "updated": 0, "unchanged": len(manual_ids)}
+        return {"success": True, "updated": 0,
+                "unchanged": len(manual_ids)}
 
-    # 2. Load rules
     rules = list(db["assignment_rules"].find().sort("priority", -1))
-
-    # 3. Load txns
     txns = list(tx.find({"id": {"$in": auto_ids}}, {"_id": 0}))
 
-    # 3B. NEW — look up google primary types
-    primary_map = get_primary_types_for_descriptions([t["description"] for t in txns])
+    # Unified primary map
+    desc_keys = [_desc_key(t) for t in txns]
+    primary_map = get_primary_types_for_descriptions(desc_keys)
 
-    # 4. Compute matches
     new_match_rows = []
+
     for txn in txns:
         tid = txn["id"]
-        primary = primary_map.get(txn["description"].lower())
+        key = _desc_key(txn)
+        primary = primary_map.get(key)
 
         for rule in rules:
             if _rule_matches_txn(txn, rule, primary_type=primary):
@@ -232,19 +216,18 @@ def assign_new_transactions(new_ids: list[str]) -> dict:
                     "rule_id": str(rule["_id"]),
                     "txn_id": tid,
                     "priority": rule.get("priority", 0),
-                    "assignment": rule.get("assignment")
+                    "assignment": rule.get("assignment"),
                 })
 
     if new_match_rows:
         rm.insert_many(new_match_rows)
 
-    # 5. Bulk winners
     summary = assign_transactions_from_matches_bulk(auto_ids)
 
     return {
         "success": True,
         **summary,
-        "manual_skipped": len(manual_ids)
+        "manual_skipped": len(manual_ids),
     }
 
 
@@ -253,28 +236,27 @@ def assign_new_transactions(new_ids: list[str]) -> dict:
 # ----------------------------------------------------------------------
 
 def set_transaction_assignment(transaction_id: str, assignment: str) -> dict:
-    """Apply a manual assignment and log it."""
     try:
         db = db_module.db
-        transactions = db["transactions"]
-        assignments = db["transaction_assignments"]
+        tx = db["transactions"]
+        ta = db["transaction_assignments"]
 
-        result = transactions.update_one(
+        result = tx.update_one(
             {"id": transaction_id},
             {"$set": {"assignment": assignment}}
         )
 
         if result.matched_count == 0:
-            return {"success": False, "message": f"Transaction {transaction_id} not found"}
+            return {"success": False,
+                    "message": f"Transaction {transaction_id} not found"}
 
-        assignments.insert_one({
+        ta.insert_one({
             "id": transaction_id,
             "assignment": assignment,
             "type": "manual",
-            "timestamp": datetime.utcnow()
+            "timestamp": datetime.utcnow(),
         })
 
-        logger.info("📝 Manual assignment applied to %s → %s", transaction_id, assignment)
         return {"success": True}
 
     except Exception as exc:
@@ -283,44 +265,53 @@ def set_transaction_assignment(transaction_id: str, assignment: str) -> dict:
 
 
 # ----------------------------------------------------------------------
-# RULE MATCHING — UPDATED TO INCLUDE primary_type
+# RULE MATCHING
 # ----------------------------------------------------------------------
 
 def _rule_matches_txn(txn: dict, rule: dict, primary_type=None) -> bool:
-    """Determine if a rule matches a transaction."""
     src = (txn.get("source") or "").lower()
-    base_desc = (txn.get("description") or "").lower()
 
-    desc = base_desc
-    if primary_type:
-        desc = f"{base_desc} {primary_type.lower()}"
+    base_desc = _desc_key(txn)  # normalized via your helper
+    desc = f"{base_desc} {primary_type.lower()}" if primary_type else base_desc
 
     amt = float(txn.get("amount") or 0)
 
-    # SOURCE
+
+    # ----- SOURCE FILTER -----
     if rule.get("source"):
         allowed = [s.strip().lower() for s in rule["source"].split(",") if s.strip()]
         if src not in allowed:
             return False
 
-    # DESCRIPTION
+    # ----- DESCRIPTION FILTER -----
     if rule.get("description"):
         text = rule["description"].lower()
-        if "," in text:
-            if not all(term.strip() in desc for term in text.split(",")):
-                return False
-        elif "|" in text:
-            if not any(term.strip() in desc for term in text.split("|")):
-                return False
-        elif text.strip() not in desc:
-            return False
 
-    # AMOUNT
+        if "," in text:
+            terms = [t.strip() for t in text.split(",") if t.strip()]
+            ok = all(term in desc for term in terms)
+            if not ok:
+                return False
+
+        elif "|" in text:
+            terms = [t.strip() for t in text.split("|") if t.strip()]
+            ok = any(term in desc for term in terms)
+            if not ok:
+                return False
+
+        else:
+            needle = text.strip()
+            ok = needle in desc
+            if not ok:
+                return False
+
+    # ----- AMOUNT FILTERS -----
     min_amt = rule.get("min_amount")
     max_amt = rule.get("max_amount")
 
     if min_amt is not None and amt < float(min_amt):
         return False
+
     if max_amt is not None and amt > float(max_amt):
         return False
 
@@ -328,23 +319,21 @@ def _rule_matches_txn(txn: dict, rule: dict, primary_type=None) -> bool:
 
 
 # ----------------------------------------------------------------------
-# BEST RULE SELECTION — UPDATED TO INCLUDE primary_type
+# BEST RULE SELECTION
 # ----------------------------------------------------------------------
 
 def find_best_assignment(txn: dict, rules: list, primary_type=None):
-    """Return (assignment, rule_id, priority) or (None, None, None)."""
     src = (txn.get("source") or "").lower()
-    base_desc = (txn.get("description") or "").lower()
 
-    desc = base_desc
-    if primary_type:
-        desc = f"{base_desc} {primary_type.lower()}"
+    base_desc = _desc_key(txn)
+    desc = f"{base_desc} {primary_type.lower()}" if primary_type else base_desc
 
     amt = float(txn.get("amount") or 0)
 
     for rule in rules:
         if rule.get("source"):
-            allowed = [s.strip().lower() for s in rule["source"].split(",") if s.strip()]
+            allowed = [s.strip().lower() for s in
+                       rule["source"].split(",") if s.strip()]
             if src not in allowed:
                 continue
 
@@ -361,7 +350,6 @@ def find_best_assignment(txn: dict, rules: list, primary_type=None):
 
         min_amt = rule.get("min_amount")
         max_amt = rule.get("max_amount")
-
         if min_amt is not None and amt < float(min_amt):
             continue
         if max_amt is not None and amt > float(max_amt):
@@ -370,22 +358,17 @@ def find_best_assignment(txn: dict, rules: list, primary_type=None):
         return (
             rule.get("assignment"),
             rule["_id"],
-            rule.get("priority", 0)
+            rule.get("priority", 0),
         )
 
     return None, None, None
 
 
 # ----------------------------------------------------------------------
-# FULL REBUILD — INCLUDES primary_type injection
+# FULL REBUILD
 # ----------------------------------------------------------------------
 
 def apply_all_rules() -> dict:
-    """
-    Apply all rules to all transactions.
-    Uses fast path if rule_matches exists, slow path otherwise.
-    """
-    import time
     t0 = time.perf_counter()
     db = db_module.db
 
@@ -394,7 +377,9 @@ def apply_all_rules() -> dict:
     ar = db["assignment_rules"]
     ta = db["transaction_assignments"]
 
-    # Internal helper for both fast+slow paths
+    # ----------------------------------
+    # Inner helper
+    # ----------------------------------
     def __apply_winner_rows(winner_rows):
         if not winner_rows:
             return {"updated": 0, "logged": 0, "skipped": 0}
@@ -403,7 +388,8 @@ def apply_all_rules() -> dict:
 
         current_map = {
             d["id"]: d.get("assignment")
-            for d in tx.find({"id": {"$in": txn_ids}}, {"id": 1, "assignment": 1})
+            for d in tx.find({"id": {"$in": txn_ids}},
+                             {"id": 1, "assignment": 1})
         }
 
         filtered_rows = []
@@ -413,17 +399,18 @@ def apply_all_rules() -> dict:
             tid = row["txn_id"]
             desired = row["assignment"]
             current = current_map.get(tid)
-
             if current == desired:
                 skipped += 1
             else:
                 filtered_rows.append(row)
 
         if not filtered_rows:
-            return {"updated": 0, "logged": 0, "skipped": skipped}
+            return {"updated": 0, "logged": 0,
+                    "skipped": skipped}
 
         updates = [
-            UpdateOne({"id": row["txn_id"]}, {"$set": {"assignment": row["assignment"]}})
+            UpdateOne({"id": row["txn_id"]},
+                      {"$set": {"assignment": row["assignment"]}})
             for row in filtered_rows
         ]
 
@@ -448,9 +435,11 @@ def apply_all_rules() -> dict:
         }
 
     try:
+        # -------------------------
         # FAST PATH
+        # -------------------------
         if rm.estimated_document_count() > 0:
-            logger.info("⚡ apply_all_rules: fast path (rule_matches present)")
+            logger.info("⚡ apply_all_rules: fast path")
 
             pipeline = [
                 {"$sort": {"priority": -1}},
@@ -471,36 +460,32 @@ def apply_all_rules() -> dict:
 
             winner_rows = list(rm.aggregate(pipeline))
             apply_result = __apply_winner_rows(winner_rows)
-            elapsed = time.perf_counter() - t0
-
-            logger.info(
-                "⚡ Fast path: updated=%d, skipped=%d in %.3fs",
-                apply_result["updated"], apply_result["skipped"], elapsed
-            )
 
             return {
                 "path": "fast",
                 "success": True,
-                "updated": apply_result["updated"],
-                "skipped": apply_result["skipped"],
-                "elapsed_sec": elapsed,
+                **apply_result,
+                "elapsed_sec": time.perf_counter() - t0,
             }
 
-        # SLOW PATH — rebuild rule_matches
-        logger.info("🐢 apply_all_rules: slow path (rebuilding rule_matches)")
+        # -------------------------
+        # SLOW PATH: rebuild rule_matches
+        # -------------------------
+        logger.info("🐢 apply_all_rules: slow path (rebuild rule_matches)")
 
         rules = list(ar.find({}).sort("priority", -1))
         txns = list(tx.find({}, {"_id": 0}))
 
-        # NEW — load primary types
-        primary_map = get_primary_types_for_descriptions([t["description"] for t in txns])
+        desc_keys = [_desc_key(t) for t in txns]
+        primary_map = get_primary_types_for_descriptions(desc_keys)
 
         match_rows = []
         winners = {}
 
         for txn in txns:
             tid = txn["id"]
-            primary = primary_map.get(txn["description"].lower())
+            key = _desc_key(txn)
+            primary = primary_map.get(key)
 
             for rule in rules:
                 if _rule_matches_txn(txn, rule, primary_type=primary):
@@ -512,7 +497,8 @@ def apply_all_rules() -> dict:
                     }
                     match_rows.append(row)
 
-                    if tid not in winners or row["priority"] > winners[tid]["priority"]:
+                    if tid not in winners \
+                       or row["priority"] > winners[tid]["priority"]:
                         winners[tid] = row
 
         if match_rows:
@@ -521,20 +507,12 @@ def apply_all_rules() -> dict:
         winner_rows = list(winners.values())
         apply_result = __apply_winner_rows(winner_rows)
 
-        elapsed = time.perf_counter() - t0
-
-        logger.info(
-            "🐢 Slow rebuild: matches=%d, updated=%d, skipped=%d in %.3fs",
-            len(match_rows), apply_result["updated"], apply_result["skipped"], elapsed
-        )
-
         return {
             "path": "slow",
             "success": True,
-            "updated": apply_result["updated"],
-            "skipped": apply_result["skipped"],
             "matches": len(match_rows),
-            "elapsed_sec": elapsed,
+            **apply_result,
+            "elapsed_sec": time.perf_counter() - t0,
         }
 
     except Exception as exc:
@@ -543,38 +521,35 @@ def apply_all_rules() -> dict:
 
 
 # ----------------------------------------------------------------------
-# INCREMENTAL RULE MGMT — all patched for primary_type
+# INCREMENTAL RULE MGMT
 # ----------------------------------------------------------------------
 
 def rule_added_incremental(rule_id: str) -> dict:
-    """
-    Incrementally apply a newly created rule.
-    """
-    import time
-    from bson import ObjectId
-
     t0 = time.perf_counter()
     db = db_module.db
     rm = db["rule_matches"]
 
     try:
+        from bson import ObjectId
         rule = db["assignment_rules"].find_one({"_id": ObjectId(rule_id)})
         if not rule:
-            msg = f"Rule {rule_id} not found"
-            logger.error(msg)
-            return {"success": False, "message": msg}
+            return {"success": False,
+                    "message": f"Rule {rule_id} not found"}
 
         priority = rule.get("priority", 0)
         assignment = rule.get("assignment")
 
         all_txns = list(db["transactions"].find({}, {"_id": 0}))
 
-        # NEW — add primary types
-        primary_map = get_primary_types_for_descriptions([t["description"] for t in all_txns])
+        desc_keys = [_desc_key(t) for t in all_txns]
+        primary_map = get_primary_types_for_descriptions(desc_keys)
 
         CURRENT_MATCHES = []
+
         for txn in all_txns:
-            primary = primary_map.get(txn["description"].lower())
+            key = _desc_key(txn)
+            primary = primary_map.get(key)
+
             if _rule_matches_txn(txn, rule, primary_type=primary):
                 CURRENT_MATCHES.append({
                     "rule_id": rule_id,
@@ -590,11 +565,6 @@ def rule_added_incremental(rule_id: str) -> dict:
 
         result = assign_transactions_from_matches_bulk(CURRENT_TXNS)
 
-        logger.info(
-            "✨ add_rule_incremental completed: %d matches, %d impacted txns",
-            len(CURRENT_MATCHES), len(CURRENT_TXNS)
-        )
-
         return {
             "success": True,
             "current_matches": len(CURRENT_MATCHES),
@@ -609,7 +579,13 @@ def rule_added_incremental(rule_id: str) -> dict:
 
 def rule_deleted_incremental(rule_id: str) -> dict:
     """
-    Clean up after a rule is deleted.
+    Incrementally handle deletion of a rule.
+    Only rule_matches entries referencing this rule_id are removed.
+    Then reassign affected transactions using the remaining rule_matches.
+
+    IMPORTANT:
+    rule_matches stores rule_id as a STRING, not ObjectId.
+    So rule_id must always be cast to str() before performing lookups.
     """
     import time
     t0 = time.perf_counter()
@@ -617,27 +593,28 @@ def rule_deleted_incremental(rule_id: str) -> dict:
     rm = db["rule_matches"]
 
     try:
+        # 🔥 CRITICAL FIX:
+        # Ensure the rule_id matches the string stored in rule_matches
+        rule_id = str(rule_id)
+
+        # Find all transactions that were matched by this rule
         PREVIOUS_MATCHES = list(
-            rm.find({"rule_id": rule_id},
-                    {"_id": 0, "rule_id": 1, "txn_id": 1,
-                     "priority": 1, "assignment": 1})
+            rm.find({"rule_id": rule_id}, {"_id": 0, "txn_id": 1})
         )
         PREVIOUS_TXNS = {m["txn_id"] for m in PREVIOUS_MATCHES}
 
+        # Remove rule_matches entries for this rule
         rm.delete_many({"rule_id": rule_id})
 
+        # Reassign these TXNs based on the remaining rule_matches
         result = assign_transactions_from_matches_bulk(PREVIOUS_TXNS)
-
-        logger.info(
-            "🗑️ delete_rule_incremental completed: %d previous matches, %d impacted",
-            len(PREVIOUS_MATCHES), len(PREVIOUS_TXNS)
-        )
 
         return {
             "success": True,
             "previous_matches": len(PREVIOUS_MATCHES),
             "impacted_txns": len(PREVIOUS_TXNS),
             "assign_result": result,
+            "elapsed_sec": time.perf_counter() - t0,
         }
 
     except Exception as exc:
@@ -646,48 +623,43 @@ def rule_deleted_incremental(rule_id: str) -> dict:
 
 
 def rule_updated_incremental(rule_id: str) -> dict:
-    """
-    Re-apply a rule after edits.
-    """
-    import time
-    from bson import ObjectId
-
     t0 = time.perf_counter()
     db = db_module.db
     rm = db["rule_matches"]
 
     try:
+        from bson import ObjectId
         rule = db["assignment_rules"].find_one({"_id": ObjectId(rule_id)})
         if not rule:
-            msg = f"Rule {rule_id} not found"
-            logger.error(msg)
-            return {"success": False, "message": msg}
+            return {"success": False,
+                    "message": f"Rule {rule_id} not found"}
 
         new_priority = rule.get("priority", 0)
         new_assignment = rule.get("assignment")
 
         PREVIOUS_MATCHES = list(
-            rm.find({"rule_id": rule_id},
-                    {"_id": 0, "rule_id": 1, "txn_id": 1,
-                     "priority": 1, "assignment": 1})
+            rm.find({"rule_id": rule_id}, {"_id": 0, "txn_id": 1})
         )
         PREVIOUS_TXNS = {m["txn_id"] for m in PREVIOUS_MATCHES}
 
         all_txns = list(db["transactions"].find({}, {"_id": 0}))
 
-        # NEW primary types
-        primary_map = get_primary_types_for_descriptions([t["description"] for t in all_txns])
+        desc_keys = [_desc_key(t) for t in all_txns]
+        primary_map = get_primary_types_for_descriptions(desc_keys)
 
         CURRENT_MATCHES = []
         for txn in all_txns:
-            primary = primary_map.get(txn["description"].lower())
+            key = _desc_key(txn)
+            primary = primary_map.get(key)
+
             if _rule_matches_txn(txn, rule, primary_type=primary):
                 CURRENT_MATCHES.append({
                     "rule_id": rule_id,
                     "txn_id": txn["id"],
                     "priority": new_priority,
-                    "assignment": new_assignment
+                    "assignment": new_assignment,
                 })
+
         CURRENT_TXNS = {m["txn_id"] for m in CURRENT_MATCHES}
 
         rm.delete_many({"rule_id": rule_id})
@@ -697,11 +669,6 @@ def rule_updated_incremental(rule_id: str) -> dict:
         IMPACTED = PREVIOUS_TXNS.union(CURRENT_TXNS)
 
         result = assign_transactions_from_matches_bulk(IMPACTED)
-
-        logger.info(
-            "✏️ edit_rule_incremental completed: %d previous, %d current, %d impacted",
-            len(PREVIOUS_MATCHES), len(CURRENT_MATCHES), len(IMPACTED)
-        )
 
         return {
             "success": True,
@@ -714,3 +681,40 @@ def rule_updated_incremental(rule_id: str) -> dict:
     except Exception as exc:
         logger.exception("❌ edit_rule_incremental failed: %s", exc)
         return {"success": False, "message": str(exc)}
+
+
+# ----------------------------------------------------------------------
+# PATCH: REAPPLY RULES WHEN MERCHANT TYPES CHANGE
+# ----------------------------------------------------------------------
+
+def apply_rules_for_updated_descriptions(desc_keys: list[str]) -> dict:
+    """
+    Given a list of normalized descriptions whose merchant types changed,
+    re-match and re-assign all affected transactions.
+    """
+    logger = logging.getLogger(__name__)
+
+    if not desc_keys:
+        logger.info("[assign_rules] No updated descriptions.")
+        return {"success": True, "count": 0}
+
+    desc_keys = list(set([dk.lower() for dk in desc_keys]))
+
+    transactions = db_module.db["transactions"]
+
+    cursor = transactions.find(
+        {"normalized_description": {"$in": desc_keys}},
+        {"_id": 0, "id": 1},
+    )
+    affected_ids = [d["id"] for d in cursor]
+
+    if not affected_ids:
+        logger.info("[assign_rules] No transactions affected.")
+        return {"success": True, "count": 0}
+
+    logger.info(
+        f"[assign_rules] Updating {len(affected_ids)} transactions "
+        f"matching {len(desc_keys)} updated descriptions."
+    )
+
+    return assign_transactions_from_matches_bulk(affected_ids)
