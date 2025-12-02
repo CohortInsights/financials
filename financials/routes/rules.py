@@ -142,27 +142,24 @@ from financials.assign_rules import rule_deleted_incremental
 
 @app.route("/api/rules/<string:rule_id>", methods=["DELETE"])
 def delete_rule(rule_id: str):
-    """
-    Delete a rule by its Mongo _id and incrementally reapply only
-    the affected assignments using delete_rule_incremental(rule_id).
-    """
     import logging
     logger = logging.getLogger(__name__)
     collection = db_module.db["assignment_rules"]
 
     try:
-        # 1️⃣ Delete the rule document first
+        # 1️⃣ Perform incremental cleanup FIRST
+        result = rule_deleted_incremental(rule_id)
+
+        # 2️⃣ Delete the rule itself afterward
         delete_result = collection.delete_one({"_id": ObjectId(rule_id)})
 
         if delete_result.deleted_count == 0:
             logger.warning("⚠️ Tried to delete missing rule %s", rule_id)
-            return jsonify({"success": False, "message": "Rule not found"}), 404
+            # The rule_matches cleanup was done; warn but don't fail
+            result["warning"] = "Rule not found in assignment_rules"
+            return jsonify(result), 200
 
         logger.info("🗑️ Deleted rule %s", rule_id)
-
-        # 2️⃣ Apply incremental cleanup and reassignment
-        result = rule_deleted_incremental(rule_id)
-
         logger.info("🔁 Rules reapplied after deletion: %s", result)
 
         return jsonify(result)
