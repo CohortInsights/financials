@@ -166,6 +166,7 @@ function onDeleteRule() {
         loadRulesTable();
 
         window.localStorage.setItem("transactionsNeedRefresh", "true");
+        window.dispatchEvent(new Event("ruleSaved"));
 
         if (resp.summary) {
           console.log(`🔁 Rules reapplied: ${resp.summary.updated} updated, ${resp.summary.unchanged} unchanged`);
