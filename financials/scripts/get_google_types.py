@@ -31,15 +31,10 @@ logging.basicConfig(level=logging.INFO)
 
 
 # ------------------------------------------------------------------------------
-# CSV Importer
+# CSV Importer (kept for reference; not exposed via CLI)
 # ------------------------------------------------------------------------------
 
 def import_google_types_from_csv():
-    """
-    Replace all documents in google_type_mappings with the contents
-    of financials/cfg/google_types_to_expenses.csv.
-    Only google_type and priority (score) are imported.
-    """
     base_dir = os.path.dirname(os.path.dirname(__file__))  # financials/
     csv_path = os.path.join(base_dir, "cfg", "google_types_to_expenses.csv")
 
@@ -77,10 +72,6 @@ def import_google_types_from_csv():
 # ------------------------------------------------------------------------------
 
 def build_query(source=None, year=None, description=None):
-    """
-    Construct a MongoDB query dict based on optional source, year,
-    and case-insensitive substring description filtering.
-    """
     query = {}
 
     if source:
@@ -93,10 +84,7 @@ def build_query(source=None, year=None, description=None):
         query["date"] = {"$gte": start, "$lt": end}
 
     if description:
-        query["description"] = {
-            "$regex": description,
-            "$options": "i"
-        }
+        query["description"] = {"$regex": description, "$options": "i"}
         logger.info(f"[get_google_types] Applying description filter: {description!r}")
 
     return query
@@ -109,15 +97,7 @@ def build_query(source=None, year=None, description=None):
 def enrich_filtered_transactions(source=None, year=None, description=None, live=False, force=False):
     """
     Enrich merchant types for transactions restricted by source/year/description.
-
-    If live=False and force=False:
-        - Only cached merchant types are used; no paid Google calls.
-    If live=True:
-        - Real Google Places lookups are performed for missing merchants.
-    If force=True:
-        - Live lookups are performed for ALL merchants, even if cached.
-        - Cached values are overwritten.
-        - Still prompts user before running.
+    After enrichment, reapply rule matching + assignments for updated descriptions.
     """
     query = build_query(source=source, year=year, description=description)
 
@@ -129,15 +109,45 @@ def enrich_filtered_transactions(source=None, year=None, description=None, live=
     projection = {"_id": 0, "id": 1, "description": 1}
 
     try:
-        get_types_for_query(
+        # Get results including merchant updates
+        result = get_types_for_query(
             query,
             projection=projection,
             apply=False,
             live=True if force else live,
             interactive=True,
-            force=force
+            force=force,
         )
+
+        merchant_updates = result.get("merchant_updates", [])
+
+        # ----------------------------------------------------------
+        # NEW: Extract updated normalized_descriptions and reapply rules
+        # ----------------------------------------------------------
+        try:
+            if merchant_updates:
+                from financials.assign_rules import apply_rules_for_updated_descriptions
+
+                updated_keys = []
+                for upd in merchant_updates:
+                    flt = getattr(upd, "_filter", {})
+                    if isinstance(flt, dict) and "normalized_description" in flt:
+                        updated_keys.append(flt["normalized_description"])
+
+                if updated_keys:
+                    logger.info(
+                        f"[get_google_types] Re-applying rules for {len(updated_keys)} updated descriptions..."
+                    )
+                    apply_rules_for_updated_descriptions(updated_keys)
+
+        except Exception as e:
+            logger.error(
+                f"[get_google_types] Failed to apply rules for updated descriptions: {e}",
+                exc_info=True
+            )
+
         logger.info("[get_google_types] Enrichment complete.")
+
     except RuntimeError as e:
         logger.info(f"[get_google_types] Enrichment aborted: {e}")
 
@@ -151,80 +161,27 @@ if __name__ == "__main__":
         description="Google merchant-type enrichment tool"
     )
 
-    parser.add_argument(
-        "--upload",
-        action="store_true",
-        help="Import google type priorities from CSV."
-    )
+    parser.add_argument("--source", type=str,
+                        help="Restrict enrichment to a given transaction source (e.g. BMO, Citi, Schwab)")
 
-    parser.add_argument(
-        "--all",
-        action="store_true",
-        help="Enrich merchant types for all transactions"
-    )
+    parser.add_argument("--year", type=int,
+                        help="Restrict enrichment to a specific year of transactions")
 
-    parser.add_argument(
-        "--source",
-        type=str,
-        help="Restrict enrichment to a given transaction source (e.g. BMO, Citi, Schwab)"
-    )
+    parser.add_argument("--live", action="store_true",
+                        help="Perform LIVE Google Places lookups (only for missing merchants).")
 
-    parser.add_argument(
-        "--year",
-        type=int,
-        help="Restrict enrichment to a specific year of transactions"
-    )
+    parser.add_argument("--force", action="store_true",
+                        help="Force live lookups for ALL merchants, overwriting cached results.")
 
-    parser.add_argument(
-        "--live",
-        action="store_true",
-        help="Perform LIVE Google Places lookups (only for missing merchants)."
-    )
-
-    parser.add_argument(
-        "--force",
-        action="store_true",
-        help="Force live lookups for ALL merchants, overwriting cached results."
-    )
-
-    parser.add_argument(
-        "--description",
-        type=str,
-        help="Case-insensitive substring to filter transactions by description"
-    )
+    parser.add_argument("--description", type=str,
+                        help="Case-insensitive substring to filter transactions by description")
 
     args = parser.parse_args()
 
-    # --------------------------------------------------------------
-    # Handle --upload option
-    # --------------------------------------------------------------
-    if args.upload:
-        import_google_types_from_csv()
-        exit(0)
-
-    # --------------------------------------------------------------
-    # Dispatch logic
-    # --------------------------------------------------------------
-
-    if args.all:
-        enrich_filtered_transactions(
-            source=None,
-            year=None,
-            description=args.description,
-            live=args.live,
-            force=args.force
-        )
-    else:
-        if args.source or args.year or args.description:
-            enrich_filtered_transactions(
-                source=args.source,
-                year=args.year,
-                description=args.description,
-                live=args.live,
-                force=args.force
-            )
-        else:
-            logger.info(
-                "No action specified. Use --all, or --source/--year/--description filters. "
-                "Example:  --source BMO  --year 2024  --description \"KWIK TRIP\" [--live|--force]"
-            )
+    enrich_filtered_transactions(
+        source=args.source,
+        year=args.year,
+        description=args.description,
+        live=args.live,
+        force=args.force
+    )
