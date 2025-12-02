@@ -1,6 +1,6 @@
 # Financials
 
-A Flask + Google Drive–based tool for downloading, normalizing, storing, and analyzing personal financial data.
+A Flask + Google Drive–based tool for downloading, normalizing, storing, enriching, and categorizing personal financial data using fast, incremental assignment logic.
 
 ---
 
@@ -10,52 +10,55 @@ https://github.com/CohortInsights/financials
 ---
 
 ## 📂 Project Structure
+
     financials/
     ├── financials/
-    │   ├── __init__.py
-    │   ├── calculator.py
-    │   ├── drive.py
-    │   ├── web.py
-    │   ├── db.py
+    │   ├── __init__.py                  # Package init; loads Flask app + Mongo connection
+    │   ├── calculator.py                # Normalizes raw CSVs; creates transaction docs
+    │   ├── drive.py                     # Google Drive ingestion utilities
+    │   ├── web.py                       # Flask entrypoint (registers routes + templates)
+    │   ├── db.py                        # MongoDB client and helpers
     │   │
     │   ├── routes/
-    │   │   ├── __init__.py
-    │   │   ├── dashboard.py
-    │   │   ├── api_transactions.py
-    │   │   ├── assign.py
-    │   │   └── rules.py
+    │   │   ├── __init__.py              # Route namespace
+    │   │   ├── dashboard.py             # Dashboard page routes
+    │   │   ├── api_transactions.py      # API for loading transactions table
+    │   │   ├── rules.py                 # API for rule create/edit/delete + recomputation
+    │   │   └── assign.py                # Internal hooks used by assignment engine
     │   │
     │   ├── utils/
     │   │   ├── __init__.py
-    │   │   ├── services.py
-    │   │   └── google_types.py
+    │   │   ├── services.py              # Misc service helpers
+    │   │   ├── google_types.py          # Google merchant-type lookup + primary-type logic
+    │   │   └── ...                      # Additional helpers
     │   │
     │   ├── templates/
-    │   │   ├── dashboard.html
-    │   │   ├── code.js
-    │   │   ├── transactions.js
-    │   │   ├── rules.js
-    │   │   └── styles.css
+    │   │   ├── dashboard.html           # Main dashboard UI
+    │   │   ├── code.js                  # Global JS orchestrator
+    │   │   ├── transactions.js          # DataTables logic for transaction listing
+    │   │   ├── rules.js                 # UI for rule table + modal + CRUD operations
+    │   │   └── styles.css               # Site styles
     │   │
     │   ├── scripts/
-    │   │   ├── delete_entries.py
-    │   │   ├── update_indexes.py
-    │   │   ├── update_rules.py
-    │   │   ├── rebuild_assignments.py
-    │   │   └── get_google_types.py
+    │   │   ├── delete_entries.py        # Bulk delete transactions by source/year
+    │   │   ├── update_indexes.py        # Ensures all MongoDB indexes exist
+    │   │   ├── update_rules.py          # Incremental rule recalculation helper
+    │   │   ├── rebuild_assignments.py   # Full rebuild of rule_matches + assignments
+    │   │   ├── get_google_types.py      # Enrichment script for merchant-type lookups
+    │   │   └── ...                      # Additional scripts
     │   │
-    │   └── assign_rules.py
+    │   └── assign_rules.py              # Core assignment engine: rule_matches + winners
     │
-    ├── main_ingest.py
-    ├── main.py
+    ├── main_ingest.py                   # Top-level ingestion: Drive → Calculator → DB
+    ├── main.py                          # Optional entrypoint for app/maintenance tasks
     │
     ├── cfg/
-    │   └── google_types_to_expenses.csv
+    │   └── google_types_to_expenses.csv # Map Google semantic types → Expense categories
     │
     ├── tests/
-    │   └── test_calculator.py
+    │   └── test_calculator.py           # Tests for normalization pipeline
     │
-    ├── pyproject.toml
+    ├── pyproject.toml                   # Poetry config and dependencies
     ├── README.md
     ├── .env
     └── .gitignore
@@ -71,198 +74,151 @@ Fields:
 - date  
 - source  
 - description  
+- normalized_description  
 - amount  
 - type  
 - assignment  
-- google_primary_type (computed in API, not stored)  
-- trade fields for Schwab (optional)
+- google_primary_type (computed dynamically, not stored)
 
 ### assignment_rules
-Automatic categorization rules with:
+Definition of automatic rules.  
+Fields:
 - assignment  
 - priority  
-- source filters  
-- description substring filters  
+- source substring  
+- description substring  
 - min_amount  
 - max_amount  
 
-### transaction_assignments
-Audit log with:
-- id  
-- assignment  
-- type = manual | auto  
-- timestamp  
-
-Manual assignments override auto-assignment.
-
 ### rule_matches
-Materialized table of all rule → transaction matches.  
+Materialized table of **all rule → transaction matches**.
+
 Used for:
-- incremental rule-add  
-- incremental delete/edit  
-- fast-path winner selection
+- incremental rule create/edit/delete  
+- scalable winner selection  
+
+Important:
+- `rule_id` is stored as a **string**, not ObjectId  
 
 Fields:
 - rule_id  
 - txn_id  
-- priority  
 - assignment  
+- priority  
+
+### transaction_assignments
+Audit log of assignment application events.
 
 ### google_merchant_types
-Semantic merchant lookup cache (via Google Places API).
+Cache of semantic merchant lookups from Google Places.
 
 Fields:
 - description_key  
-- google_types  
 - google_raw_types  
+- google_filtered_types  
 - google_primary_type  
 - google_place_id  
-- google_lookup_status (“ok”, “not_found”, etc.)  
+- google_lookup_status  
 - google_last_checked  
 
 ### google_type_mappings
-Curated mapping of Google semantic types → Financials Expense.* categories.
+Mapping of Google semantic types to internal Expense.* categories.
 
-Fields:
-- google_type  
-- expense_assignment  
-- priority  
+---
 
-This is the ontology used by merchant-type enrichment.
+## Ingestion & Normalization Workflow
+
+1. **calculator.py** processes raw CSVs from each provider.  
+2. Extracts, normalizes, and stores transactions in Mongo.  
+3. Computes and stores `normalized_description`.  
+4. New descriptions become candidates for semantic enrichment.
 
 ---
 
 ## Google Merchant-Type Enrichment
 
-Merchant-type enrichment resolves raw bank descriptions into semantic Google categories.
+Performed via `get_google_types_for_descriptions`:
 
-The workflow:
-1. Normalize description → description_key  
-2. Lookup from google_merchant_types  
-3. If cached, reuse  
-4. If missing and --live passed, query Google Places  
-5. Filter raw types using google_type_mappings  
-6. Store: filtered types, raw types, place_id, lookup status, primary type  
-7. Primary type is a single best semantic label based on priority score
-
----
-
-## Primary Google Type in Dashboard
-
-The dashboard now exposes the merchant's primary Google semantic type.
-
-- A new table column “Google Type” appears in Transactions  
-- It is loaded from google_merchant_types  
-- It is never stored in transactions  
-- It is computed dynamically in api_transactions.py via get_primary_types_for_descriptions  
-
-This greatly improves debugging of rule behavior.
+1. Lookup `normalized_description` in the `google_merchant_types` cache.  
+2. If missing:  
+   - use cached results  
+   - optionally call Google Places (`--live`)  
+3. Filter raw Google types using `google_type_mappings`.  
+4. Store: filtered types, raw types, place_id, lookup status.  
+5. Select a single `google_primary_type`.  
+6. This type is appended to the description during rule matching.
 
 ---
 
-## Assignment Engine Integration
+## Rule & Assignment Workflow (High-Level Overview)
 
-The assignment engine (assign_rules.py) now incorporates merchant primary types in all paths:
+Assignments are driven by:
 
-- new transaction ingestion  
-- incremental rule creation  
-- incremental rule deletion  
-- incremental rule update  
-- full rebuild (slow path)  
-- fast path (winner selection)
+- `assignment_rules`  
+- `rule_matches`  
+- `transactions.assignment`
 
-Implementation details:
-- Primary type is appended to the description before rule matching  
-- Matching continues to use substring logic (source, description, amount)  
-- Rules may match against semantic types (e.g., “restaurant”, “grocery”)  
+### Workflow:
 
-Helper used:
-get_primary_types_for_descriptions in google_types.py
+1. **rule_matches generation**  
+   - For each transaction, evaluate all rules.  
+   - Insert matches into `rule_matches`.  
+   - Matching uses:  
+     - source filters  
+     - description + appended google_primary_type  
+     - min/max amount  
 
-This helper returns a map:
-    normalized_description → primary Google type (or empty)
+2. **Winner selection**  
+   - For each transaction, choose rule with **highest priority** from its matches.
 
----
-
-## Enrichment Script
-
-financials/scripts/get_google_types.py
-
-Capabilities:
-- --source  
-- --year  
-- --description  
-- --all  
-- --live (enables paid Google lookups)  
-- Dry-run with full cost preview  
-- Cached lookups always reused  
-
-Example:
-    poetry run python -m financials.scripts.get_google_types --year 2025 --live
+3. **Assignment write-back**  
+   - Update the `transactions` collection with the winning assignment.  
+   - Happens on:  
+     - new ingestion  
+     - new rule  
+     - rule edit  
+     - rule delete  
+     - rebuild operations  
 
 ---
 
-## Setup
+## Incremental Rule Update Model
 
-Requires Python 3.12+ and Poetry.
+Fast-path updates avoid full rebuilds:
 
-    poetry install
-    poetry shell
+- **New transactions:**  
+  generate rule_matches → compute winners → update assignment.
 
----
+- **New rule:**  
+  compute matches for that rule → compute winners for affected txns.
 
-## Credentials
+- **Edit rule:**  
+  recompute matches → recompute winners.
 
-Google Drive OAuth credentials stored under json/.  
-Token files created automatically.
+- **Delete rule:**  
+  remove rule_matches for that rule → recompute winners for those txns.
 
----
-
-## Tests
-
-    poetry run pytest -v
+The system maintains correctness through materialized rule_matches and targeted recomputation.
 
 ---
 
-## Running the App
+## Assignment Rebuild Tools
 
-    poetry run flask --app financials/web.py run
+### rebuild_assignments.py
+Full slow-path rebuild of **all** rule_matches and assignments.
 
-Open:  
-http://127.0.0.1:5000/dashboard
+### update_rules.py
+Recompute rule_matches for existing rules (incremental).
 
----
+### update_indexes.py
+Ensures all required Mongo indexes exist for performance.
 
-## Data Ingestion
-
-    poetry run python main_ingest.py
-
----
-
-## Utility Scripts
-
-### Delete Entries
-    poetry run python -m financials.scripts.delete_entries --source bmo
+### get_google_types.py
+Standalone enrichment utility for merchant-type lookups.
 
 ---
 
-## Dashboard and API
+## UI Event Model
 
-### /api/transactions
-Now returns:
-- google_primary_type column  
-- semantic debugging info  
+The frontend listens globally for:
 
----
-
-## Roadmap
-
-- Visualization layer  
-- Assignment breakdowns  
-- More semantic rules  
-- Google-type based rule generator UI  
-
----
-
-## License
-TBD
