@@ -84,6 +84,10 @@ def run_ingestion(year=None):
 
     # Perform incremental assignment for all new IDs
     if all_new_ids:
+        from financials.utils.google_types import get_types_for_transactions
+        # Load any new google_types associated with transactions
+        # get_types_for_transactions(txns=all_new_ids, live=True, primary=True)
+        # Update matching rules and perform assignments
         assign_summary = assign_new_transactions(all_new_ids)
         logger.info(f"🔧 Incremental assignment result: {assign_summary}")
     else:
