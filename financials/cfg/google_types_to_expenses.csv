@@ -1,4 +1,5 @@
 google_type,assignment,score
+fast_food_restaurant,Expenses.Food.Fast,40
 accounting,Expense.Services.Accounting,30
 airport,Expense.Travel,20
 amusement_park,Expense.Entertainment.Recreation,30
