@@ -11,6 +11,7 @@ import os
 import csv
 import logging
 from financials import db as db_module
+import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -76,8 +77,42 @@ def install_google_type_rules():
     )
 
 
+def import_google_types_from_csv():
+    base_dir = os.path.dirname(os.path.dirname(__file__))  # financials/
+    csv_path = os.path.join(base_dir, "cfg", "google_types_to_expenses.csv")
+
+    logger.info(f"[import] Loading CSV: {csv_path}")
+
+    df = pd.read_csv(csv_path)
+    df.columns = [c.strip() for c in df.columns]
+
+    required = {"google_type", "score"}
+    if not required.issubset(df.columns):
+        raise RuntimeError(
+            f"CSV missing required columns: {required - set(df.columns)}"
+        )
+
+    db = db_module.db
+    coll = db["google_type_mappings"]
+
+    logger.info("[import] Clearing google_type_mappings collection...")
+    coll.delete_many({})
+
+    records = []
+    for _, row in df.iterrows():
+        gt = str(row["google_type"]).strip()
+        pr = int(row["score"])
+        records.append({"google_type": gt, "priority": pr})
+
+    if records:
+        coll.insert_many(records)
+
+    logger.info(f"[import] Loaded {len(records)} google type mappings.")
+
+
 if __name__ == "__main__":
     import logging
     logging.basicConfig(level=logging.INFO)
 
+    import_google_types_from_csv()
     install_google_type_rules()
