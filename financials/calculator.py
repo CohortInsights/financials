@@ -70,11 +70,11 @@ class FinancialsCalculator:
         # Normalize headers for BOM, whitespace, case, zero-width chars
         df.columns = (
             df.columns
-                .astype(str)
-                .str.replace("\ufeff", "", regex=False)
-                .str.replace("\u200b", "", regex=False)
-                .str.strip()
-                .str.replace("\xa0", " ", regex=False)
+            .astype(str)
+            .str.replace("\ufeff", "", regex=False)
+            .str.replace("\u200b", "", regex=False)
+            .str.strip()
+            .str.replace("\xa0", " ", regex=False)
         )
 
         return df
@@ -169,7 +169,7 @@ class FinancialsCalculator:
             return self._normalize_bmo(df, source)
         if s == "citi":
             out = self._normalize_citi(df, source)
-        elif s == "capitolone":
+        elif s == "capitolone" or s == "capitalone":
             out = self._normalize_capitol_one(df, source)
         elif s == "discover":
             out = self._normalize_discover(df, source)
@@ -419,8 +419,10 @@ class FinancialsCalculator:
         out["source"] = source
         desc_col = "Description" if "Description" in df.columns else df.columns[1]
         out["description"] = df[desc_col].astype(str)
-        debit = pd.to_numeric(df["Debit"], errors="coerce").fillna(0) if "Debit" in df.columns else pd.Series(0, index=df.index)
-        credit = pd.to_numeric(df["Credit"], errors="coerce").fillna(0) if "Credit" in df.columns else pd.Series(0, index=df.index)
+        debit = pd.to_numeric(df["Debit"], errors="coerce").fillna(0) if "Debit" in df.columns else pd.Series(0,
+                                                                                                              index=df.index)
+        credit = pd.to_numeric(df["Credit"], errors="coerce").fillna(0) if "Credit" in df.columns else pd.Series(0,
+                                                                                                                 index=df.index)
         out["amount"] = credit - debit
         out["type"] = ["Credit" if c > 0 else "Debit" if d > 0 else "" for c, d in zip(credit, debit)]
         return out[["date", "source", "description", "amount", "type"]]
@@ -491,6 +493,7 @@ class FinancialsCalculator:
 
         return out[["date", "source", "description", "amount", "type"]]
 
+
     def _normalize_paypal(self, df: pd.DataFrame, source: str) -> pd.DataFrame:
         out = pd.DataFrame()
 
@@ -518,7 +521,12 @@ class FinancialsCalculator:
             raise ValueError("No status column found in PayPal CSV")
 
         if "Gross" in df.columns:
-            raw_amount = pd.to_numeric(df["Gross"], errors="coerce")
+            raw_amount = (
+                df["Gross"]
+                .astype(str)
+                .str.replace(",", "", regex=False)
+                .pipe(pd.to_numeric, errors="coerce")
+            )
         elif "Amount" in df.columns:
             raw_amount = pd.to_numeric(df["Amount"], errors="coerce")
         elif 7 in df.columns:
@@ -561,10 +569,10 @@ class FinancialsCalculator:
             type_col = pd.Series("", index=df.index)
 
         mask_noise = (
-            type_col.str.contains("hold")
-            | type_col.str.contains("authorization")
-            | type_col.str.contains("reversal")
-            | type_col.str.contains("currency conversion")
+                type_col.str.contains("hold")
+                | type_col.str.contains("authorization")
+                | type_col.str.contains("reversal")
+                | type_col.str.contains("currency conversion")
         )
 
         if balance_impact is not None:
@@ -573,13 +581,13 @@ class FinancialsCalculator:
             mask_memo = pd.Series(False, index=df.index)
 
         final_mask = mask_completed & (~mask_noise) & (~mask_memo)
-        out = out.loc[final_mask].copy()
 
         out["source"] = source
-
         out["type"] = out["amount"].apply(lambda x: "Credit" if x > 0 else "Debit")
 
-        return out[["date", "source", "description", "amount", "type"]]
+        out_df: pd.DataFrame = out[["date", "source", "description", "amount", "type"]]
+
+        return out_df
 
 
 def _parse_schwab_date(value: str) -> pd.Timestamp:
