@@ -493,7 +493,6 @@ class FinancialsCalculator:
 
         return out[["date", "source", "description", "amount", "type"]]
 
-
     def _normalize_paypal(self, df: pd.DataFrame, source: str) -> pd.DataFrame:
         out = pd.DataFrame()
 
@@ -569,10 +568,10 @@ class FinancialsCalculator:
             type_col = pd.Series("", index=df.index)
 
         mask_noise = (
-                type_col.str.contains("hold")
-                | type_col.str.contains("authorization")
-                | type_col.str.contains("reversal")
-                | type_col.str.contains("currency conversion")
+            type_col.str.contains("hold")
+            | type_col.str.contains("authorization")
+            | type_col.str.contains("reversal")
+            | type_col.str.contains("currency conversion")
         )
 
         if balance_impact is not None:
@@ -580,7 +579,16 @@ class FinancialsCalculator:
         else:
             mask_memo = pd.Series(False, index=df.index)
 
+        # --- PATCH: Remove garbage rows where description == "PayPal" ---
+        mask_paypal_garbage = out["description"].str.lower() == "paypal"
+        out = out.loc[~mask_paypal_garbage].copy()
+        # ---------------------------------------------------------------
+
         final_mask = mask_completed & (~mask_noise) & (~mask_memo)
+
+        # patch: align mask with out index
+        aligned_mask = final_mask.reindex(out.index, fill_value=False)
+        out = out.loc[aligned_mask].copy()
 
         out["source"] = source
         out["type"] = out["amount"].apply(lambda x: "Credit" if x > 0 else "Debit")

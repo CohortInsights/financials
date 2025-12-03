@@ -201,6 +201,57 @@ Fast-path updates avoid full rebuilds:
 The system maintains correctness through materialized rule_matches and targeted recomputation.
 
 ---
+## 🔐 Data Sensitivity Model
+
+The Financials project includes several MongoDB collections, but **not all collections are equally important**. Some can be safely regenerated at any time, while others must be preserved and backed up. This section documents the **official sensitivity hierarchy** for all data in the system.
+
+### 🥇 1. `assignment_rules` — *Most Sensitive (Critical)*  
+This is the **ONLY irreplaceable collection** in the entire project.
+
+- Defines the user’s rule logic for automatic assignment.  
+- Fully human-created and **cannot be reconstructed** from ingestion.  
+- Must be protected from accidental deletion or modification.  
+- Must be backed up regularly.  
+- Scripts should never alter or clear this collection unless explicitly requested.
+
+### 🥈 2. `google_merchant_types` — *Second Most Sensitive (Costly to Rebuild)*  
+This collection is technically repopulatable, but doing so:
+
+- Requires calling the Google Places API  
+- Consumes paid API credits  
+- Is time-consuming  
+- May produce different results over time (Google data changes)  
+
+Therefore:
+
+- Treat this as **semi-protected**  
+- Never wipe or bulk-replace it without explicit intent  
+- All scripts should avoid modifying it unless instructed
+
+### 🟦 3. All Other Collections — *Safe to Delete or Rebuild*  
+These collections are **fully derived** from ingestion and the assignment engine. They can be truncated or rebuilt at any time:
+
+- `transactions` — always regenerated from CSV ingestion  
+- `rule_matches` — fully derived; always recomputed  
+- `transaction_assignments` — derived audit history; safe to delete  
+- `google_type_mappings` — static file-based config  
+- Any other helper or cache collections  
+
+No backups are required for these. They can be safely reset as part of maintenance or debugging.
+
+---
+
+### ✅ Summary
+
+- **Always protect:**  
+  - `assignment_rules`  
+  - `google_merchant_types`  
+
+- **Everything else:**  
+  Fully rebuildable and non-sensitive.
+
+This model guides all cleanup scripts, ingestion behavior, rebuild tools, and admin utilities in the project.
+
 
 ## Assignment Rebuild Tools
 
