@@ -687,34 +687,34 @@ def rule_updated_incremental(rule_id: str) -> dict:
 # PATCH: REAPPLY RULES WHEN MERCHANT TYPES CHANGE
 # ----------------------------------------------------------------------
 
-def apply_rules_for_updated_descriptions(desc_keys: list[str]) -> dict:
+def assign_primary_and_apply_rules_for_transactions(txn_map: dict[str, str]) -> dict:
     """
-    Given a list of normalized descriptions whose merchant types changed,
-    re-match and re-assign all affected transactions.
+    Given a map of transaction id's keyed to their primary google type, update the primary
+    type of the transaction and perform related assignments
     """
     logger = logging.getLogger(__name__)
 
-    if not desc_keys:
-        logger.info("[assign_rules] No updated descriptions.")
-        return {"success": True, "count": 0}
-
-    desc_keys = list(set([dk.lower() for dk in desc_keys]))
-
     transactions = db_module.db["transactions"]
+    affected_ids = list(txn_map.keys())
 
-    cursor = transactions.find(
-        {"normalized_description": {"$in": desc_keys}},
-        {"_id": 0, "id": 1},
-    )
-    affected_ids = [d["id"] for d in cursor]
+    # ---------------------------------------------------------
+    # Bulk update google_primary_type for each affected txn
+    # ---------------------------------------------------------
+    ops = []
+    for txn_id, primary_type in txn_map.items():
+        ops.append(
+            UpdateOne(
+                {"id": txn_id},
+                {"$set": {"google_primary_type": primary_type}}
+            )
+        )
 
-    if not affected_ids:
-        logger.info("[assign_rules] No transactions affected.")
+    if ops:
+        result = transactions.bulk_write(ops, ordered=False)
+        logger.info(f"[assign_rules] Primary type updates applied: {result.modified_count}")
+    else:
+        logger.info("[assign_rules] No transactions affected by merchant updates.")
         return {"success": True, "count": 0}
 
-    logger.info(
-        f"[assign_rules] Updating {len(affected_ids)} transactions "
-        f"matching {len(desc_keys)} updated descriptions."
-    )
-
+    logger.info(f"[assign_rules] Updating assignments for {len(affected_ids)} transactions")
     return assign_transactions_from_matches_bulk(affected_ids)

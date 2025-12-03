@@ -34,40 +34,11 @@ logging.basicConfig(level=logging.INFO)
 # CSV Importer (kept for reference; not exposed via CLI)
 # ------------------------------------------------------------------------------
 
-def import_google_types_from_csv():
-    base_dir = os.path.dirname(os.path.dirname(__file__))  # financials/
-    csv_path = os.path.join(base_dir, "cfg", "google_types_to_expenses.csv")
-
-    logger.info(f"[import] Loading CSV: {csv_path}")
-
-    df = pd.read_csv(csv_path)
-    df.columns = [c.strip() for c in df.columns]
-
-    required = {"google_type", "score"}
-    if not required.issubset(df.columns):
-        raise RuntimeError(
-            f"CSV missing required columns: {required - set(df.columns)}"
-        )
-
-    db = db_module.db
-    coll = db["google_type_mappings"]
-
-    logger.info("[import] Clearing google_type_mappings collection...")
-    coll.delete_many({})
-
-    records = []
-    for _, row in df.iterrows():
-        gt = str(row["google_type"]).strip()
-        pr = int(row["score"])
-        records.append({"google_type": gt, "priority": pr})
-
-    if records:
-        coll.insert_many(records)
-
-    logger.info(f"[import] Loaded {len(records)} google type mappings.")
 
 
-# ------------------------------------------------------------------------------
+# ------------------------y
+# y
+# -----------------------------------------------------
 # Query builder
 # ------------------------------------------------------------------------------
 
@@ -94,7 +65,7 @@ def build_query(source=None, year=None, description=None):
 # Operations
 # ------------------------------------------------------------------------------
 
-def enrich_filtered_transactions(source=None, year=None, description=None, live=False, force=False):
+def assign_primary_and_apply_rules_for_query(source=None, year=None, description=None, live=False, force=False):
     """
     Enrich merchant types for transactions restricted by source/year/description.
     After enrichment, reapply rule matching + assignments for updated descriptions.
@@ -109,36 +80,23 @@ def enrich_filtered_transactions(source=None, year=None, description=None, live=
     projection = {"_id": 0, "id": 1, "description": 1}
 
     try:
-        # Get results including merchant updates
-        result = get_types_for_query(
+        # Get primary types mapped to the txn_id
+        txn_merchant_map = get_types_for_query(
             query,
             projection=projection,
-            apply=False,
             live=True if force else live,
             interactive=True,
             force=force,
+            primary=True,
         )
-
-        merchant_updates = result.get("merchant_updates", [])
 
         # ----------------------------------------------------------
         # NEW: Extract updated normalized_descriptions and reapply rules
         # ----------------------------------------------------------
         try:
-            if merchant_updates:
-                from financials.assign_rules import apply_rules_for_updated_descriptions
-
-                updated_keys = []
-                for upd in merchant_updates:
-                    flt = getattr(upd, "_filter", {})
-                    if isinstance(flt, dict) and "normalized_description" in flt:
-                        updated_keys.append(flt["normalized_description"])
-
-                if updated_keys:
-                    logger.info(
-                        f"[get_google_types] Re-applying rules for {len(updated_keys)} updated descriptions..."
-                    )
-                    apply_rules_for_updated_descriptions(updated_keys)
+            if txn_merchant_map:
+                from financials.assign_rules import assign_primary_and_apply_rules_for_transactions
+                assign_primary_and_apply_rules_for_transactions(txn_merchant_map)
 
         except Exception as e:
             logger.error(
@@ -178,7 +136,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    enrich_filtered_transactions(
+    assign_primary_and_apply_rules_for_query(
         source=args.source,
         year=args.year,
         description=args.description,

@@ -56,7 +56,7 @@ def get_primary_types_for_descriptions(descriptions):
     return result
 
 
-def get_types_for_descriptions(descriptions, live=False, interactive=False, force=False):
+def get_types_for_descriptions(descriptions, live=False, interactive=False, force=False, primary=False):
     """
     Resolve Google merchant types for a list of description strings.
 
@@ -76,6 +76,8 @@ def get_types_for_descriptions(descriptions, live=False, interactive=False, forc
             If True:
                 Ignore cache entirely, always perform live lookups, and always
                 overwrite stored results (still with interactive confirmation).
+        primary (bool):
+                Whether the return type is the primary google type (True) or the list of all google_types (False)
 
     Returns:
         dict[str, list[str]]:
@@ -120,8 +122,11 @@ def get_types_for_descriptions(descriptions, live=False, interactive=False, forc
             continue
 
         # DEFAULT BEHAVIOR — reuse cached "ok" entries
-        if record and record.get("google_lookup_status") == "ok":
-            results[desc] = record.get("google_types", [])
+        if record and record.get("google_lookup_status") in ("ok", "not_found"):
+            if primary:
+                results[desc] = record.get("google_primary_type", [])
+            else:
+                results[desc] = record.get("google_types", [])
         else:
             needs_lookup.append(desc)
 
@@ -159,7 +164,6 @@ def get_types_for_descriptions(descriptions, live=False, interactive=False, forc
     if interactive:
         _prompt_for_live_confirmation(needs_lookup)
 
-    ops = []
     timestamp = datetime.datetime.utcnow()
 
     # Load merchant priority scoring map once for the run
@@ -168,41 +172,41 @@ def get_types_for_descriptions(descriptions, live=False, interactive=False, forc
         for doc in type_map_coll.find({}, {"_id": 0, "google_type": 1, "priority": 1})
     }
 
+    # ---------------------------------------------
+    # NEW: One-at-a-time writes (no bulk_write)
+    # ---------------------------------------------
     for idx, desc in enumerate(needs_lookup, start=1):
         logger.info(f"[google_types] ({idx}/{len(needs_lookup)}) Looking up '{desc}'...")
 
         place_id, raw_types = _lookup_google_by_text(desc, api_key)
         filtered = _filter_google_types(raw_types, valid_types)
-        primary = _select_primary_type(filtered, type_priority_map)
+        primary_value = _select_primary_type(filtered, type_priority_map)
 
         status = "ok" if filtered or place_id else "not_found"
 
-        ops.append(
-            UpdateOne(
-                {"normalized_description": desc},
-                {
-                    "$set": {
-                        "normalized_description": desc,
-                        "google_place_id": place_id,
-                        "google_types": filtered,
-                        "google_raw_types": raw_types,
-                        "google_primary_type": primary,
-                        "google_lookup_status": status,
-                        "google_last_checked": timestamp,
-                    }
-                },
-                upsert=True,
-            )
+        # Immediate persistence for each merchant update
+        merchant.update_one(
+            {"normalized_description": desc},
+            {
+                "$set": {
+                    "normalized_description": desc,
+                    "google_place_id": place_id,
+                    "google_types": filtered,
+                    "google_raw_types": raw_types,
+                    "google_primary_type": primary_value,
+                    "google_lookup_status": status,
+                    "google_last_checked": timestamp,
+                }
+            },
+            upsert=True,
         )
 
-        results[desc] = filtered
+        if primary:
+            results[desc] = primary_value
+        else:
+            results[desc] = filtered
+
         time.sleep(0.2)
-
-    if ops:
-        logger.info(
-            f"[google_types] Performing bulk write of {len(ops)} merchant updates..."
-        )
-        merchant.bulk_write(ops, ordered=False)
 
     logger.info(
         f"[google_types] Merchant-type enrichment complete. Total={len(results)}."
@@ -211,40 +215,31 @@ def get_types_for_descriptions(descriptions, live=False, interactive=False, forc
     return results
 
 
-def get_types_for_transactions(txns, apply=False, live=False, interactive=False, force=False):
+def get_types_for_transactions(txns, live=False, interactive=False, force=False, primary=False):
     """
     Resolve Google merchant types for a batch of full transaction records.
     """
     if not txns:
-        return [] if apply else {}
+        return []
 
     descriptions = [txn["description"] for txn in txns]
     merchant_map = get_types_for_descriptions(
-        descriptions, live=live, interactive=interactive, force=force
+        descriptions, live=live, interactive=interactive, force=force, primary=primary
     )
 
-    if not apply:
-        out = {}
-        for txn in txns:
-            desc_key = normalize_description(txn["description"])
-            out[txn["id"]] = merchant_map.get(desc_key, [])
-        return out
-
-    # apply=True
+    out = {}
     for txn in txns:
         desc_key = normalize_description(txn["description"])
-        gtypes = merchant_map.get(desc_key, [])
-        _apply_tokens_to_transaction(txn, gtypes)
-
-    return txns
+        out[txn["id"]] = merchant_map.get(desc_key, [])
+    return out
 
 
-def get_types_for_transaction_ids(ids, apply=False, live=False, interactive=False, force=False):
+def get_types_for_transaction_ids(ids, live=False, interactive=False, force=False, primary=False):
     """
     Resolve Google merchant types for a set of transaction IDs.
     """
     if not ids:
-        return [] if apply else {}
+        return []
 
     db = db_module.db
     trx_coll = db["transactions"]
@@ -257,12 +252,11 @@ def get_types_for_transaction_ids(ids, apply=False, live=False, interactive=Fals
     )
 
     return get_types_for_transactions(
-        txns, apply=apply, live=live, interactive=interactive, force=force
+        txns, live=live, interactive=interactive, force=force, primary=primary
     )
 
 
-def get_types_for_query(query_dict, projection=None, apply=False,
-                        live=False, interactive=False, force=False):
+def get_types_for_query(query_dict, projection=None, live=False, interactive=False, force=False, primary=False):
     """
     Lookup Google merchant types for a MongoDB query over transactions.
     """
@@ -275,7 +269,7 @@ def get_types_for_query(query_dict, projection=None, apply=False,
     txns = list(trx_coll.find(query_dict, projection))
 
     return get_types_for_transactions(
-        txns, apply=apply, live=live, interactive=interactive, force=force
+        txns, live=live, interactive=interactive, force=force, primary=primary
     )
 
 
