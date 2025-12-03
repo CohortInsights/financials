@@ -5,7 +5,6 @@ import numpy as np
 
 from financials import db as db_module
 from financials.web import app
-from financials.utils.helpers import normalize_description
 
 
 def respond_with_format(df: pd.DataFrame, filename: str):
@@ -25,49 +24,6 @@ def respond_with_format(df: pd.DataFrame, filename: str):
 
     # JSON response
     return jsonify(df.to_dict(orient="records"))
-
-
-def attach_google_primary(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    UI-only enrichment: add google_primary_type to each transaction row
-    based on its description, using the google_merchant_types cache.
-
-    Does not perform any live Google calls or write to Mongo.
-    """
-    if df.empty or "description" not in df.columns:
-        df["google_primary_type"] = ""
-        return df
-
-    db = db_module.db
-    merchant = db["google_merchant_types"]
-
-    # Normalize descriptions to match description_key format
-    unique_keys = sorted(
-        set(normalize_description(d) for d in df["description"].dropna())
-    )
-
-    if not unique_keys:
-        df["google_primary_type"] = ""
-        return df
-
-    cursor = merchant.find(
-        {"description_key": {"$in": unique_keys}},
-        {"_id": 0, "description_key": 1, "google_primary_type": 1}
-    )
-
-    records = list(cursor)
-
-    lookup = {
-        rec["description_key"]: rec.get("google_primary_type", "")
-        for rec in records
-    }
-
-    df["google_primary_type"] = df["description"].apply(
-        lambda d: lookup.get(normalize_description(d), "")
-        if isinstance(d, str) else ""
-    )
-
-    return df
 
 
 def compute_transactions(args):
@@ -92,9 +48,6 @@ def compute_transactions(args):
     df = pd.DataFrame(list(cursor))
 
     if not df.empty:
-        # 🔹 Attach google_primary_type from the merchant cache
-        df = attach_google_primary(df)
-
         if "date" in df.columns and pd.api.types.is_datetime64_any_dtype(df["date"]):
             df["date"] = df["date"].dt.strftime("%Y-%m-%d")
         if "amount" in df.columns:
