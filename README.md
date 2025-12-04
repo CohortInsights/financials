@@ -130,6 +130,8 @@ Mapping of Google semantic types to internal Expense.* categories.
 
 1. **calculator.py** processes raw CSVs from each provider.  
 2. Extracts, normalizes, and stores transactions in Mongo.  
+3. A transaction ID is formed from a hash of date, description, and amount
+4. This hash is used to remove duplicate entries found in csv's with overlapping date ranges. 
 3. Computes and stores `normalized_description`.  
 4. New descriptions become candidates for semantic enrichment.
 
@@ -209,7 +211,7 @@ The Financials project includes several MongoDB collections, but **not all colle
 This is the **ONLY irreplaceable collection** in the entire project.
 
 - Defines the user’s rule logic for automatic assignment.  
-- Fully human-created and **cannot be reconstructed** from ingestion.  
+- Partially human-created and **cannot be reconstructed** from ingestion.  
 - Must be protected from accidental deletion or modification.  
 - Must be backed up regularly.  
 - Scripts should never alter or clear this collection unless explicitly requested.
@@ -232,7 +234,7 @@ Therefore:
 These collections are **fully derived** from ingestion and the assignment engine. They can be truncated or rebuilt at any time:
 
 - `transactions` — always regenerated from CSV ingestion  
-- `rule_matches` — fully derived; always recomputed  
+- `rule_matches` — fully derived; recomputable in batch  
 - `transaction_assignments` — derived audit history; safe to delete  
 - `google_type_mappings` — static file-based config  
 - Any other helper or cache collections  
