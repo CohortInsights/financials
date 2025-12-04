@@ -39,11 +39,8 @@ function loadTransactions() {
 
       if (transactionTable) {
         const currentPage = transactionTable.page();
-
         transactionTable.clear().rows.add(data).draw(false);
-
         transactionTable.page(currentPage).draw(false);
-
         console.log("♻️ Table reloaded with new data (page preserved)");
       } else {
         buildTransactionTable(data);
@@ -65,10 +62,7 @@ function buildTransactionTable(data) {
       { data: 'amount', title: 'Amount', render: $.fn.dataTable.render.number(',', '.', 2, '$') },
       { data: 'type', title: 'Type' },
       { data: 'assignment', title: 'Assignment', defaultContent: 'Unspecified' },
-
-      // ✅ NEW COLUMN — shows the Google primary merchant type
       { data: 'google_primary_type', title: 'Primary Type', defaultContent: '' },
-
       {
         data: null,
         title: 'Action',
@@ -81,7 +75,52 @@ function buildTransactionTable(data) {
     scrollY: '70vh',
     scrollCollapse: true,
     paging: true,
-    initComplete: addColumnFilters
+    initComplete: addColumnFilters,
+
+    // -----------------------------------------------------------
+    // ✅ Net Row Logic (fixed, no redraw recursion)
+    // -----------------------------------------------------------
+    drawCallback: function () {
+      const api = this.api();
+
+      // Use the cloned header (visible frozen header), not the original <thead>
+      const header = $("#transactions_wrapper .dataTables_scrollHead thead");
+
+      // Remove existing Net row
+      header.find("#net-row").remove();
+
+      const amountIdx = 3;
+
+      // Sum filtered amounts
+      const sum = api
+        .column(amountIdx, { search: "applied" })
+        .data()
+        .reduce((acc, v) => acc + parseFloat(v || 0), 0);
+
+      const formatted = sum.toLocaleString(undefined, {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+      });
+
+      // We want "Net" to appear under the Description column (index 2)
+      const descriptionIdx = 2;
+
+      // Build Net row cells
+      const colCount = api.columns().count();
+      let cells = "";
+
+      for (let i = 0; i < colCount; i++) {
+          if (i === descriptionIdx) cells += "<td>Net</td>";
+          else if (i === amountIdx) cells += `<td>$${formatted}</td>`;
+          else cells += "<td></td>";
+      }
+
+      const netRow = `<tr id="net-row">${cells}</tr>`;
+
+      // Insert just under the main header row (in the cloned header)
+      header.find("tr:first").after(netRow);
+    }
+    // -----------------------------------------------------------
   });
 
   $('#transactions tbody').on('click', 'button.assign-btn', onAssignClick);

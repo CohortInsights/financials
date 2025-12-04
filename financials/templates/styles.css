@@ -266,4 +266,12 @@ table.dataTable tfoot input {
 .dataTables_wrapper .dataTables_scrollBody {
     max-height: 55vh !important;
     overflow-y: auto !important;
+
+}/* --- Net summary header row --- */
+#net-row td {
+    background-color: #f0f4ff !important;
+    font-weight: bold;
+    color: #003366;
+    border-bottom: 1px solid #ccc;
 }
+
