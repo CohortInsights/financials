@@ -193,7 +193,6 @@ class FinancialsCalculator:
     # --------------------------
     # Transaction IDs + Persistence
     # --------------------------
-
     def add_transaction_ids(self, df: pd.DataFrame) -> pd.DataFrame:
         if "id" not in df.columns:
             df["id"] = None
@@ -205,12 +204,20 @@ class FinancialsCalculator:
             source = str(row["source"]).lower()
             date = str(row["date"]).lower()
             description = str(row["description"]).lower()
+
             try:
-                amount = f"{float(row['amount']):.2f}"
+                amount_float = float(row["amount"])
+                amount = f"{amount_float:.2f}"
             except Exception:
+                amount_float = 0.0
                 amount = "0.00"
 
-            content = f"{source}{date}{description}{amount}"
+            # 🔥 minimal fix: encode sign explicitly so regex doesn't remove it
+            sign = "n" if amount_float < 0 else "p"
+
+            # 🔥 add the sign before amount (only change to content)
+            content = f"{source}{date}{description}{sign}{amount}"
+
             content = re.sub(r"[^a-z0-9.]", "", content)
             h = hashlib.sha256(content.encode("utf-8")).hexdigest()
             return h[-16:]
