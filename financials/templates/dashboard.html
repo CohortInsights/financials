@@ -28,6 +28,15 @@
                 Transactions
             </button>
         </li>
+
+        <!-- ⭐ NEW: Assignments Tab -->
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="assignments-tab" data-bs-toggle="tab" data-bs-target="#tab-assignments"
+                    type="button" role="tab" aria-controls="tab-assignments" aria-selected="false">
+                Assignments
+            </button>
+        </li>
+
         <li class="nav-item" role="presentation">
             <button class="nav-link" id="rules-tab" data-bs-toggle="tab" data-bs-target="#tab-rules"
                     type="button" role="tab" aria-controls="tab-rules" aria-selected="false">
@@ -60,7 +69,7 @@
                     <th>Amount</th>
                     <th>Type</th>
                     <th>Assignment</th>
-                    <th>Primary Type</th>   <!-- ✅ NEW -->
+                    <th>Primary Type</th>
                     <th>Action</th>
                 </tr>
                 </thead>
@@ -72,9 +81,44 @@
                     <th>Amount</th>
                     <th>Type</th>
                     <th>Assignment</th>
-                    <th>Primary Type</th>   <!-- ✅ NEW -->
+                    <th>Primary Type</th>
                     <th>Action</th>
                 </tr>
+                </tfoot>
+                <tbody></tbody>
+            </table>
+        </div>
+
+        <!-- ⭐ NEW: Assignments tab -->
+        <div class="tab-pane fade" id="tab-assignments" role="tabpanel" aria-labelledby="assignments-tab">
+
+            <!-- Year selector (independent copy) -->
+            <div id="assignmentsYearSelector" class="year-selector">
+                <label><input type="checkbox" value="2025" checked> 2025</label>
+                <label><input type="checkbox" value="2024"> 2024</label>
+                <label><input type="checkbox" value="2023"> 2023</label>
+            </div>
+
+            <table id="assignments" class="display" style="width:100%">
+                <thead>
+                    <tr>
+                        <th>Period</th>
+                        <th>Assignment</th>
+                        <th>Count</th>
+                        <th>Amount</th>
+                        <th>Level</th>
+                        <th>Action</th> <!-- blank for now -->
+                    </tr>
+                </thead>
+                <tfoot>
+                    <tr>
+                        <th></th> <!-- Period: no filter -->
+                        <th>Assignment</th>
+                        <th></th> <!-- Count: no filter -->
+                        <th></th> <!-- Amount: no filter -->
+                        <th>Level</th>
+                        <th></th> <!-- Action -->
+                    </tr>
                 </tfoot>
                 <tbody></tbody>
             </table>
@@ -118,7 +162,7 @@
     </div>
 </div>
 
-<!-- 🔹 Add Rule Modal -->
+<!-- Add Rule Modal -->
 <div class="modal fade" id="addRuleModal" tabindex="-1" aria-labelledby="addRuleLabel" aria-hidden="true">
   <div class="modal-dialog">
     <div class="modal-content">
@@ -182,6 +226,9 @@
 <script src="templates/code.js" defer></script>
 <script src="templates/transactions.js" defer></script>
 <script src="templates/rules.js" defer></script>
+
+<!-- ⭐ NEW -->
+<script src="templates/assignments.js" defer></script>
 
 </body>
 </html>

@@ -20,4 +20,25 @@ document.addEventListener('DOMContentLoaded', function() {
     } else {
         console.error("❌ transactions.js not loaded or initTransactions missing");
     }
+
+    // -------------------------------------------------------------
+    // ⭐ NEW: Initialize Assignments ONLY when its tab is activated
+    // -------------------------------------------------------------
+    let assignmentsInitialized = false;
+
+    const assignmentsTab = document.getElementById('assignments-tab');
+    if (assignmentsTab) {
+        assignmentsTab.addEventListener('shown.bs.tab', function () {
+            if (!assignmentsInitialized) {
+                if (typeof initAssignments === "function") {
+                    console.log("📘 Initializing assignments dashboard");
+                    initAssignments();
+                    assignmentsInitialized = true;
+                } else {
+                    console.error("❌ assignments.js not loaded or initAssignments missing");
+                }
+            }
+        });
+    }
+    // -------------------------------------------------------------
 });

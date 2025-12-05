@@ -271,6 +271,72 @@ Standalone enrichment utility for merchant-type lookups.
 
 ---
 
+### Assignments Tab
+
+The **Assignments** tab provides a hierarchical, rolled-up view of all assigned transactions.  
+For each **period (year)** and **assignment**, it displays:
+
+- the total number of transactions in that category,
+- the summed amount of those transactions, and
+- the assignment hierarchy **level** (1, 2, or 3).
+
+This view is used to analyze spending patterns and category structure across years.
+
+#### Route
+
+Data for this tab is retrieved from the following endpoint:
+
+    /api/assigned_transactions?years=2025,2024,2023&expand=1
+
+- `years` is a comma-separated list determined by the tab’s year-selector checkboxes.
+- `expand=1` instructs the backend to return hierarchical rollups (levels 1–3).
+- The Assignments tab follows the same multi-year pattern as the Transactions tab.
+
+#### Columns
+
+The Assignments data table contains the following columns:
+
+- **Period** – year of the summarized group  
+- **Assignment** – assignment category string  
+- **Count** – total number of transactions summarized  
+- **Amount** – summed amount for the group  
+- **Level** – hierarchy depth of the assignment  
+- **Action** – reserved for future interactions (currently unused)
+
+#### Filters
+
+Only **Assignment** and **Level** support column filters.
+
+- **Assignment filter**  
+  - Accepts comma-separated values: `a,b,c`  
+  - Performs *substring* OR filtering (case-insensitive)  
+  - Example: `auto,fuel` matches any assignment containing either token.
+
+- **Level filter**  
+  - Accepts comma-separated integers: `1`, `2,3`  
+  - Performs OR matching on exact level numbers  
+  - Example: `2,3` displays only levels 2 or 3.
+
+Columns **Period**, **Count**, **Amount**, and **Action** do not have filters.
+
+#### Year Selection
+
+The Assignments tab includes its **own** year-selector block (independent of the Transactions tab).  
+Selections update the table by re-fetching:
+
+    /api/assigned_transactions?years=<selected-years>&expand=1
+
+#### Rule Change Behavior
+
+Whenever assignment rules are created, modified, or removed, a global `ruleSaved` event is emitted.  
+Both the **Transactions** and **Assignments** tables listen for this event:
+
+- If the tab’s table has already been initialized, its data is immediately refreshed.
+- If the tab has *not* yet been opened (lazy initialization), it will load fresh data on first activation.
+
+This ensures both views always reflect the current rule logic.
+
+
 ## UI Event Model
 
 The frontend listens globally for:

@@ -59,12 +59,28 @@ def compute_transactions(args):
     return df
 
 
+def _should_expand(args) -> bool:
+    """
+    Return True if the caller requested hierarchical expansion via ?expand=true/1/yes.
+    """
+    val = args.get("expand", "").strip().lower()
+    return val in ("1", "true", "yes", "y")
+
+
 def group_by_assignment_time_period(df: pd.DataFrame, args):
     """
     Group transactions by assignment and time period.
 
     Returns DataFrame with:
         period, assignment, count, amount, level
+
+    If ?expand=true is present, also adds hierarchical roll-up rows:
+    - For each assignment like A.B.C (level 3), aggregates into parent A.B (level 2)
+    - For each assignment like A.B (level 2), aggregates into parent A (level 1)
+    - Stops at level 1 (no level-0 empty-assignment row)
+    - If a parent already exists, child totals are ADDED to it
+      (count += sum(children.count), amount += sum(children.amount))
+    - If a parent does not exist, it is created.
     """
 
     if df.empty:
@@ -87,7 +103,7 @@ def group_by_assignment_time_period(df: pd.DataFrame, args):
     else:  # duration == "year" (default)
         df["period"] = df["date"].dt.year.astype(str)
 
-    # Group
+    # Base grouping: period + assignment
     grouped = (
         df.groupby(["period", "assignment"], dropna=False)
         .agg(
@@ -100,15 +116,91 @@ def group_by_assignment_time_period(df: pd.DataFrame, args):
     # Replace NaN assignment with empty string
     grouped["assignment"] = grouped["assignment"].fillna("")
 
-    # Format to two decimal places
-    grouped["amount"] = grouped["amount"].astype(float).round(2)
-
-    # ----------------------------------------------------
-    # ✅ NEW COLUMN: Level = number of dots + 1
-    # ----------------------------------------------------
+    # Level = number of dots + 1; treat empty assignment as level 1
     grouped["level"] = grouped["assignment"].apply(
         lambda a: a.count(".") + 1 if a else 1
     )
+
+    # Normalize amount to exactly 2 decimal places
+    grouped["amount"] = grouped["amount"].astype(float).round(2)
+
+    # ----------------------------------------------------
+    # Optional hierarchical expansion: ?expand=true
+    # ----------------------------------------------------
+    if _should_expand(args):
+        # Work from deepest level down to level 2, rolling up into parents
+        max_level = int(grouped["level"].max())
+
+        # We never generate level 0 parents; stop when we have produced level 1.
+        for level in range(max_level, 1, -1):
+            # Children at this level
+            children = grouped[grouped["level"] == level].copy()
+            if children.empty:
+                continue
+
+            # Derive parent assignment by stripping the last segment after '.'
+            # e.g. "Expense.Auto.Fuel" -> "Expense.Auto"
+            # Only rows that actually have a dot can produce parents
+            mask_has_dot = children["assignment"].str.contains(r"\.")
+            children = children[mask_has_dot].copy()
+            if children.empty:
+                continue
+
+            children["parent_assignment"] = (
+                children["assignment"]
+                .str.rsplit(".", n=1, expand=True)
+                .iloc[:, 0]
+            )
+
+            # Aggregate by (period, parent_assignment)
+            parent_agg = (
+                children.groupby(["period", "parent_assignment"], as_index=False)
+                .agg(
+                    count=("count", "sum"),
+                    amount=("amount", "sum"),
+                )
+            )
+
+            # For each parent, either update existing row or create a new one
+            for _, row in parent_agg.iterrows():
+                period = row["period"]
+                parent_assignment = row["parent_assignment"]
+                add_count = row["count"]
+                add_amount = float(row["amount"])
+
+                existing_mask = (
+                    (grouped["period"] == period)
+                    & (grouped["assignment"] == parent_assignment)
+                )
+
+                if existing_mask.any():
+                    # Add to existing parent
+                    grouped.loc[existing_mask, "count"] = (
+                        grouped.loc[existing_mask, "count"] + add_count
+                    )
+                    grouped.loc[existing_mask, "amount"] = (
+                        grouped.loc[existing_mask, "amount"] + add_amount
+                    )
+                else:
+                    # Create new parent row
+                    parent_level = parent_assignment.count(".") + 1 if parent_assignment else 1
+                    new_row = {
+                        "period": period,
+                        "assignment": parent_assignment,
+                        "count": add_count,
+                        "amount": add_amount,
+                        "level": parent_level,
+                    }
+                    grouped = pd.concat(
+                        [grouped, pd.DataFrame([new_row])],
+                        ignore_index=True,
+                    )
+
+        # Re-normalize amount after roll-ups
+        grouped["amount"] = grouped["amount"].astype(float).round(2)
+
+    # Final sort: level (outer), then assignment (inner)
+    grouped = grouped.sort_values(["level", "assignment"]).reset_index(drop=True)
 
     return grouped
 
