@@ -95,14 +95,18 @@ function onEditRule() {
   const rowData = rulesTable.row($(this).closest("tr")).data();
   editingRuleId = rowData._id;
 
-  // Populate form fields
   const form = document.getElementById("addRuleForm");
-  form.priority.value = rowData.priority;
-  form.source.value = rowData.source;
-  form.description.value = rowData.description;
-  form.min_amount.value = rowData.min_amount;
-  form.max_amount.value = rowData.max_amount;
-  form.assignment.value = rowData.assignment;
+  form.priority.value = rowData.priority ?? "";
+  form.source.value = rowData.source ?? "";
+  form.description.value = rowData.description ?? "";
+  form.min_amount.value = rowData.min_amount ?? "";
+  form.max_amount.value = rowData.max_amount ?? "";
+
+  // ⭐ NEW: populate date fields
+  form.start_date.value = rowData.start_date ? rowData.start_date.substring(0, 10) : "";
+  form.end_date.value = rowData.end_date ? rowData.end_date.substring(0, 10) : "";
+
+  form.assignment.value = rowData.assignment ?? "";
 
   document.getElementById("addRuleLabel").textContent = "Edit Rule";
   const modal = new bootstrap.Modal(document.getElementById("addRuleModal"));
@@ -115,17 +119,23 @@ function onEditRule() {
 function saveRule() {
   const form = document.getElementById("addRuleForm");
   const data = Object.fromEntries(new FormData(form).entries());
-  data.priority = parseInt(data.priority);
+
+  // Convert numeric fields
+  data.priority = data.priority ? parseInt(data.priority) : null;
   data.min_amount = data.min_amount ? parseFloat(data.min_amount) : null;
   data.max_amount = data.max_amount ? parseFloat(data.max_amount) : null;
+
+  // ⭐ NEW: Convert date fields (blank → null)
+  data.start_date = data.start_date ? data.start_date : null;
+  data.end_date = data.end_date ? data.end_date : null;
 
   const url = editingRuleId ? `/api/rules/${editingRuleId}` : "/api/rules";
   const method = editingRuleId ? "PUT" : "POST";
 
   fetch(url, {
-    method,
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(data)
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data)
   })
     .then(res => res.json())
     .then(resp => {
@@ -134,14 +144,8 @@ function saveRule() {
         loadRulesTable();
         console.log(`✅ Rule ${editingRuleId ? "updated" : "added"} successfully.`);
 
-        // 🔁 Mark transactions for refresh when tab is next opened
         window.localStorage.setItem("transactionsNeedRefresh", "true");
         window.dispatchEvent(new Event("ruleSaved"));
-
-        if (resp.summary) {
-          console.log(`🔁 Rules reapplied: ${resp.summary.updated} updated, ${resp.summary.unchanged} unchanged`);
-        }
-
       } else {
         alert("⚠️ Save failed: " + (resp.message || "unknown error"));
       }

@@ -276,6 +276,17 @@ def _rule_matches_txn(txn: dict, rule: dict, primary_type=None) -> bool:
 
     amt = float(txn.get("amount") or 0)
 
+    # ----- DATE FILTERS -----
+    # Only applied if rule has start_date or end_date populated.
+    tx_date = txn.get("date")
+    if tx_date:
+        start = rule.get("start_date")
+        end = rule.get("end_date")
+
+        if start and tx_date < start:
+            return False
+        if end and tx_date > end:
+            return False
 
     # ----- SOURCE FILTER -----
     if rule.get("source"):
@@ -321,48 +332,6 @@ def _rule_matches_txn(txn: dict, rule: dict, primary_type=None) -> bool:
 # ----------------------------------------------------------------------
 # BEST RULE SELECTION
 # ----------------------------------------------------------------------
-
-def find_best_assignment(txn: dict, rules: list, primary_type=None):
-    src = (txn.get("source") or "").lower()
-
-    base_desc = _desc_key(txn)
-    desc = f"{base_desc} {primary_type.lower()}" if primary_type else base_desc
-
-    amt = float(txn.get("amount") or 0)
-
-    for rule in rules:
-        if rule.get("source"):
-            allowed = [s.strip().lower() for s in
-                       rule["source"].split(",") if s.strip()]
-            if src not in allowed:
-                continue
-
-        if rule.get("description"):
-            text = rule["description"].lower()
-            if "," in text:
-                if not all(term.strip() in desc for term in text.split(",")):
-                    continue
-            elif "|" in text:
-                if not any(term.strip() in desc for term in text.split("|")):
-                    continue
-            elif text.strip() not in desc:
-                continue
-
-        min_amt = rule.get("min_amount")
-        max_amt = rule.get("max_amount")
-        if min_amt is not None and amt < float(min_amt):
-            continue
-        if max_amt is not None and amt > float(max_amt):
-            continue
-
-        return (
-            rule.get("assignment"),
-            rule["_id"],
-            rule.get("priority", 0),
-        )
-
-    return None, None, None
-
 
 # ----------------------------------------------------------------------
 # FULL REBUILD

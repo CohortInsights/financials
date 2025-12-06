@@ -4,6 +4,7 @@ from financials.web import app
 from bson import ObjectId
 import logging
 import pandas as pd
+from datetime import datetime, date
 
 logger = logging.getLogger(__name__)
 
@@ -11,11 +12,6 @@ logger = logging.getLogger(__name__)
 def parse_amount(value):
     """
     Convert incoming JSON value for min_amount/max_amount into a float or None.
-
-    Rules:
-    - None, "", "null" (case-insensitive) -> None
-    - numeric strings / numbers -> float(...)
-    - anything else -> None
     """
     if value is None:
         return None
@@ -33,6 +29,20 @@ def parse_amount(value):
         return None
 
 
+def parse_date(value):
+    """
+    Convert incoming YYYY-MM-DD strings into datetime.datetime for Mongo storage.
+    Returns None for blank, null, or malformed inputs.
+    """
+    if not value:
+        return None
+    try:
+        # Mongo-friendly datetime (midnight UTC/local)
+        return datetime.strptime(value, "%Y-%m-%d")
+    except Exception:
+        return None
+
+
 # ----------------------------------------------------------------------
 # READ ALL RULES
 # ----------------------------------------------------------------------
@@ -43,20 +53,21 @@ def get_rules():
     collection = db_module.db["assignment_rules"]
     rules = list(collection.find({}))
 
-    # Convert ObjectId → string
+    # Convert ObjectId → string and datetime.date → ISO strings
     for rule in rules:
         rule["_id"] = str(rule["_id"])
+        if isinstance(rule.get("start_date"), (datetime, date)):
+            rule["start_date"] = rule["start_date"].strftime("%Y-%m-%d")
+        if isinstance(rule.get("end_date"), (datetime, date)):
+            rule["end_date"] = rule["end_date"].strftime("%Y-%m-%d")
 
     if fmt == "csv":
         df = pd.DataFrame(rules)
         csv_data = df.to_csv(index=False)
-
         return Response(
             csv_data,
             mimetype="text/csv",
-            headers={
-                "Content-Disposition": "attachment; filename=assignment_rules.csv"
-            }
+            headers={"Content-Disposition": "attachment; filename=assignment_rules.csv"}
         )
 
     return jsonify(rules)
@@ -78,13 +89,16 @@ def add_rule():
         "min_amount": parse_amount(data.get("min_amount")),
         "max_amount": parse_amount(data.get("max_amount")),
         "assignment": data.get("assignment", "").strip(),
+        # ⭐ NEW DATE FIELDS
+        "start_date": parse_date(data.get("start_date")),
+        "end_date": parse_date(data.get("end_date")),
     }
 
     try:
         result = collection.insert_one(rule)
         logger.info("🟢 Added rule: %s", rule)
 
-        # NEW — incremental create instead of full rebuild
+        # Incremental rule-application
         from financials.assign_rules import rule_added_incremental
         incremental = rule_added_incremental(str(result.inserted_id))
 
@@ -115,6 +129,9 @@ def update_rule(rule_id: str):
         "min_amount": parse_amount(data.get("min_amount")),
         "max_amount": parse_amount(data.get("max_amount")),
         "assignment": data.get("assignment", "").strip(),
+        # ⭐ NEW DATE FIELDS
+        "start_date": parse_date(data.get("start_date")),
+        "end_date": parse_date(data.get("end_date")),
     }
 
     try:
@@ -122,7 +139,7 @@ def update_rule(rule_id: str):
         success = result.modified_count > 0
         logger.info("✏️ Updated rule %s: %s", rule_id, update)
 
-        # NEW — incremental edit instead of full rebuild
+        # Incremental rule update
         from financials.assign_rules import rule_updated_incremental
         incremental = rule_updated_incremental(rule_id)
 
@@ -138,29 +155,20 @@ def update_rule(rule_id: str):
 # ----------------------------------------------------------------------
 from financials.assign_rules import rule_deleted_incremental
 
-from financials.assign_rules import rule_deleted_incremental
-
 @app.route("/api/rules/<string:rule_id>", methods=["DELETE"])
 def delete_rule(rule_id: str):
-    import logging
-    logger = logging.getLogger(__name__)
     collection = db_module.db["assignment_rules"]
 
     try:
-        # 1️⃣ Perform incremental cleanup FIRST
+        # Remove matches first
         result = rule_deleted_incremental(rule_id)
 
-        # 2️⃣ Delete the rule itself afterward
+        # Delete rule from DB
         delete_result = collection.delete_one({"_id": ObjectId(rule_id)})
 
         if delete_result.deleted_count == 0:
-            logger.warning("⚠️ Tried to delete missing rule %s", rule_id)
-            # The rule_matches cleanup was done; warn but don't fail
             result["warning"] = "Rule not found in assignment_rules"
             return jsonify(result), 200
-
-        logger.info("🗑️ Deleted rule %s", rule_id)
-        logger.info("🔁 Rules reapplied after deletion: %s", result)
 
         return jsonify(result)
 
