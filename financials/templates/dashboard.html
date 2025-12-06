@@ -29,7 +29,6 @@
             </button>
         </li>
 
-        <!-- ⭐ NEW: Assignments Tab -->
         <li class="nav-item" role="presentation">
             <button class="nav-link" id="assignments-tab" data-bs-toggle="tab" data-bs-target="#tab-assignments"
                     type="button" role="tab" aria-controls="tab-assignments" aria-selected="false">
@@ -51,7 +50,6 @@
         <!-- Transactions tab -->
         <div class="tab-pane fade show active" id="tab-transactions" role="tabpanel" aria-labelledby="transactions-tab">
 
-            <!-- 🔹 Year selection checkboxes -->
             <div id="yearSelector" class="year-selector">
                 <label><input type="checkbox" value="2025" checked> 2025</label>
                 <label><input type="checkbox" value="2024"> 2024</label>
@@ -89,14 +87,26 @@
             </table>
         </div>
 
-        <!-- ⭐ NEW: Assignments tab -->
+        <!-- Assignments tab -->
         <div class="tab-pane fade" id="tab-assignments" role="tabpanel" aria-labelledby="assignments-tab">
 
-            <!-- Year selector (independent copy) -->
-            <div id="assignmentsYearSelector" class="year-selector">
-                <label><input type="checkbox" value="2025" checked> 2025</label>
-                <label><input type="checkbox" value="2024"> 2024</label>
-                <label><input type="checkbox" value="2023"> 2023</label>
+            <!-- Combined controls: year selector + duration selector -->
+            <div class="assignments-header-row mb-3">
+
+                <!-- Existing year selector -->
+                <div id="assignmentsYearSelector" class="year-selector">
+                    <label><input type="checkbox" value="2025" checked> 2025</label>
+                    <label><input type="checkbox" value="2024"> 2024</label>
+                    <label><input type="checkbox" value="2023"> 2023</label>
+                </div>
+
+                <!-- NEW duration segmented control -->
+                <div id="durationSelector" class="btn-group ms-3" role="group">
+                    <button type="button" class="btn btn-outline-primary active" data-duration="year">Year</button>
+                    <button type="button" class="btn btn-outline-primary" data-duration="quarter">Quarter</button>
+                    <button type="button" class="btn btn-outline-primary" data-duration="month">Month</button>
+                </div>
+
             </div>
 
             <table id="assignments" class="display" style="width:100%">
@@ -107,17 +117,17 @@
                         <th>Count</th>
                         <th>Amount</th>
                         <th>Level</th>
-                        <th>Action</th> <!-- blank for now -->
+                        <th>Action</th>
                     </tr>
                 </thead>
                 <tfoot>
                     <tr>
-                        <th></th> <!-- Period: no filter -->
+                        <th></th>
                         <th>Assignment</th>
-                        <th></th> <!-- Count: no filter -->
-                        <th></th> <!-- Amount: no filter -->
+                        <th></th>
+                        <th></th>
                         <th>Level</th>
-                        <th></th> <!-- Action -->
+                        <th></th>
                     </tr>
                 </tfoot>
                 <tbody></tbody>
@@ -132,8 +142,8 @@
                     <button id="addRuleBtn" class="btn btn-success btn-sm">Add Rule</button>
                 </div>
 
-            <table id="rulesTable" class="display" style="width:100%">
-                <thead>
+                <table id="rulesTable" class="display" style="width:100%">
+                    <thead>
                     <tr>
                         <th>Assignment</th>
                         <th>Priority</th>
@@ -143,9 +153,9 @@
                         <th>Max_Amount</th>
                         <th>Actions</th>
                     </tr>
-                </thead>
-                <tbody></tbody>
-                <tfoot>
+                    </thead>
+                    <tbody></tbody>
+                    <tfoot>
                     <tr>
                         <th>Assignment</th>
                         <th>Priority</th>
@@ -155,8 +165,8 @@
                         <th>Max_Amount</th>
                         <th>Actions</th>
                     </tr>
-                </tfoot>
-            </table>
+                    </tfoot>
+                </table>
             </div>
         </div>
     </div>
@@ -176,22 +186,37 @@
             <label class="form-label">Priority</label>
             <input name="priority" type="number" class="form-control" required>
           </div>
+
           <div class="mb-2">
             <label class="form-label">Source</label>
             <input name="source" type="text" class="form-control">
           </div>
+
           <div class="mb-2">
             <label class="form-label">Description</label>
             <input name="description" type="text" class="form-control">
           </div>
+
           <div class="mb-2">
             <label class="form-label">Min Amount</label>
             <input name="min_amount" type="number" class="form-control">
           </div>
+
           <div class="mb-2">
             <label class="form-label">Max Amount</label>
             <input name="max_amount" type="number" class="form-control">
           </div>
+
+          <div class="mb-2">
+            <label class="form-label">Start Date</label>
+            <input name="start_date" type="date" class="form-control">
+          </div>
+
+          <div class="mb-2">
+            <label class="form-label">End Date</label>
+            <input name="end_date" type="date" class="form-control">
+          </div>
+
           <div class="mb-2">
             <label class="form-label">Assignment</label>
             <input name="assignment" type="text" class="form-control" required>
@@ -206,28 +231,22 @@
   </div>
 </div>
 
-<!-- User data injected from Flask -->
 <script id="user-data" type="application/json">
     {{ user_data | tojson }}
 </script>
 
-<!-- JS libraries -->
 <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
 <script src="https://cdn.datatables.net/1.13.8/js/jquery.dataTables.min.js"></script>
 
-<!-- Bootstrap JS (bundle includes Popper) -->
 <script
   src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
   integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz"
   crossorigin="anonymous">
 </script>
 
-<!-- App scripts -->
 <script src="templates/code.js" defer></script>
 <script src="templates/transactions.js" defer></script>
 <script src="templates/rules.js" defer></script>
-
-<!-- ⭐ NEW -->
 <script src="templates/assignments.js" defer></script>
 
 </body>

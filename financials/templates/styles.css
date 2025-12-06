@@ -62,14 +62,13 @@
 /* --- Transaction Table Layout --- */
 
 #table-container {
-    margin-top: 80px;        /* pushes table below the top controls */
+    margin-top: 80px;
     padding: 20px;
     width: 95%;
     margin-left: auto;
     margin-right: auto;
 }
 
-/* DataTables theme alignment */
 .dataTables_wrapper {
     font-family: Arial, sans-serif;
     font-size: 15px;
@@ -117,7 +116,8 @@ table.dataTable thead input {
     border-radius: 4px;
     padding: 3px 6px;
     font-size: 13px;
-}/* Footer filter row */
+}
+
 table.dataTable tfoot th {
     padding: 4px 6px;
     background-color: #f8f8f8;
@@ -133,20 +133,21 @@ table.dataTable tfoot input {
     font-size: 12px;
 }
 
-/* === Year Selector Styling === */
+/* === Year Selector Styling (neutral behavior) === */
 .year-selector {
     display: flex;
     gap: 1.2rem;
     align-items: center;
-    justify-content: center;
-    margin-bottom: 1rem;
+
+    /* no global centering anymore */
+    margin: 0;
+    justify-content: flex-start;
+
     padding: 0.5rem 0;
     background-color: #f8f9fb;
     border: 1px solid #ddd;
     border-radius: 8px;
     width: fit-content;
-    margin-left: auto;
-    margin-right: auto;
 }
 
 .year-selector label {
@@ -159,7 +160,14 @@ table.dataTable tfoot input {
 .year-selector input[type="checkbox"] {
     transform: scale(1.2);
     margin-right: 6px;
-    accent-color: #3366cc; /* modern browsers only */
+    accent-color: #3366cc;
+}
+
+/* Transactions tab: center the year selector */
+#tab-transactions .year-selector {
+    margin-left: auto;
+    margin-right: auto;
+    justify-content: center;
 }
 
 /* === Reload Button alignment === */
@@ -181,7 +189,7 @@ table.dataTable tfoot input {
     background-color: #224b9b;
 }
 
-/* --- Assign button styling --- */
+/* Assign button styling */
 .assign-btn {
     background-color: #0074D9;
     color: white;
@@ -197,77 +205,66 @@ table.dataTable tfoot input {
     background-color: #005fa3;
 }
 
-/* Table appearance tweaks */
 #transactions td, #transactions th {
     text-align: left;
     vertical-align: middle;
 }
+
 .modal-dialog {
-  max-width: 480px;         /* narrower than default 600px */
+  max-width: 480px;
 }
+
 .modal-body {
-  max-height: 65vh;         /* keep modal from filling entire viewport */
+  max-height: 65vh;
   overflow-y: auto;
 }
-/* Reserve space for pagination controls */
+
 .dataTables_wrapper .dataTables_paginate {
     margin-top: 6px !important;
 }
 
 .dataTables_wrapper {
-    padding-bottom: 50px !important;   /* ensures pagination has breathing room */
+    padding-bottom: 50px !important;
 }
 
 .dataTables_wrapper .dataTables_scrollBody {
-    max-height: 55vh !important;   /* was 60vh — gives footer + pagination more room */
+    max-height: 55vh !important;
     overflow-y: auto !important;
 }
 
-/* --- Compact Transactions Toolbar --- */
-
-/* Reduce spacing above/below the year selector and reload button */
+/* Compact Transactions Toolbar */
 #tab-transactions .year-selector,
 #reloadButton {
     margin-bottom: 0.2rem !important;
 }
 
-/* Smaller, tighter year selector box */
 .year-selector {
     padding: 0.2rem 0.6rem !important;
     gap: 0.8rem !important;
     font-size: 14px !important;
 }
 
-/* Shrink reload button */
 .reload-button {
     padding: 3px 10px !important;
     font-size: 13px !important;
     margin-top: 0.2rem !important;
 }
 
-/* Pull DataTables controls upward */
 .dataTables_wrapper .dataTables_length,
 .dataTables_wrapper .dataTables_filter {
     margin-top: 0.2rem !important;
     margin-bottom: 0.2rem !important;
 }
 
-/* Reduce top margin under tab bar */
 .tab-content {
     margin-top: 0.4rem !important;
 }
 
-/* Give pagination room at the bottom */
 .dataTables_wrapper {
     padding-bottom: 50px !important;
 }
 
-/* Slightly reduce scroll-body height to prevent overlap */
-.dataTables_wrapper .dataTables_scrollBody {
-    max-height: 55vh !important;
-    overflow-y: auto !important;
-
-}/* --- Net summary header row --- */
+/* Net summary header row */
 #net-row td {
     background-color: #f0f4ff !important;
     font-weight: bold;
@@ -275,3 +272,27 @@ table.dataTable tfoot input {
     border-bottom: 1px solid #ccc;
 }
 
+/* --- Assignments header layout (year + duration controls) --- */
+.assignments-header-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+}
+
+/* --- Minimal styling for duration buttons --- */
+#durationSelector .btn {
+    padding: 4px 10px;
+    font-size: 14px;
+}
+
+#durationSelector .btn.active {
+    background-color: #0d6efd !important;
+    border-color: #0d6efd !important;
+    color: white !important;
+}
+
+#durationSelector .btn:hover:not(.active) {
+    background-color: #e8f0ff;
+    color: #0d6efd;
+}

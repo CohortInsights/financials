@@ -3,6 +3,9 @@
 // --- Global reference to the assignments DataTable ---
 var assignmentsTable = null;
 
+// --- Duration selection state ---
+let currentDuration = "year";
+
 // --- Reload Assignments table when rules change ---
 window.addEventListener("ruleSaved", () => {
     if (assignmentsTable) {
@@ -24,7 +27,9 @@ function getSelectedAssignmentYears() {
 function loadAssignments() {
     const years = getSelectedAssignmentYears();
     const param = years.join(',');
-    const url = `/api/assigned_transactions?years=${param}&expand=1`;
+
+    const url =
+        `/api/assigned_transactions?years=${param}&duration=${currentDuration}&expand=1`;
 
     console.log("📘 loadAssignments() →", url);
 
@@ -54,7 +59,11 @@ function buildAssignmentsTable(data) {
             { data: 'period',   title: 'Period' },
             { data: 'assignment', title: 'Assignment', defaultContent: '' },
             { data: 'count',    title: 'Count' },
-            { data: 'amount',   title: 'Amount', render: $.fn.dataTable.render.number(',', '.', 2, '$') },
+            {
+                data: 'amount',
+                title: 'Amount',
+                render: $.fn.dataTable.render.number(',', '.', 2, '$')
+            },
             { data: 'level',    title: 'Level' },
             {
                 data: null,
@@ -84,15 +93,13 @@ function addAssignmentFilters() {
         // 2 = Count (no filter)
         // 3 = Amount (no filter)
         // 4 = Level (filter)
-        // 5 = Action (no filter)
+        // 5 = Action (none)
 
-        // Only add filters to Assignment (1) and Level (4)
         if (!(idx === 1 || idx === 4)) {
-            $(column.footer()).empty(); // ensure footer cell is blank
+            $(column.footer()).empty();
             return;
         }
 
-        // Create input
         const input = document.createElement("input");
         input.placeholder = idx === 1 ? "Filter Assignment" : "Filter Level";
         input.style.width = "90%";
@@ -101,52 +108,44 @@ function addAssignmentFilters() {
 
         $(column.footer()).empty().append(input);
 
-        // --- Assignment filter (substring OR match: "a,b")
+        // --- Assignment filter
         if (idx === 1) {
             $(input).on('keyup change clear', debounce(function () {
                 let raw = this.value.trim().toLowerCase();
-
                 if (raw === "") {
                     column.search("", true, false).draw();
                     return;
                 }
 
                 let tokens = raw.split(',')
-                                .map(s => s.trim())
-                                .filter(s => s.length > 0);
+                    .map(s => s.trim())
+                    .filter(s => s.length > 0);
 
-                // Build OR pattern for substring match
                 let pattern = tokens.map(t => `(?=.*${t})`).join("|");
                 column.search(pattern, true, false).draw();
-
             }, 150));
         }
 
-        // --- Level filter (numeric OR match: "1,3")
+        // --- Level filter
         if (idx === 4) {
             $(input).on('keyup change clear', debounce(function () {
                 let raw = this.value.trim();
-
                 if (raw === "") {
                     column.search("", true, false).draw();
                     return;
                 }
 
-                // Split into integers
                 let nums = raw.split(',')
-                              .map(s => s.trim())
-                              .filter(s => /^\d+$/.test(s)); // keep only numeric tokens
+                    .map(s => s.trim())
+                    .filter(s => /^\d+$/.test(s));
 
                 if (nums.length === 0) {
                     column.search("", true, false).draw();
                     return;
                 }
 
-                // Build OR pattern for exact matches (e.g., (^2$|^3$))
                 let pattern = nums.map(n => `^${n}$`).join("|");
-
                 column.search(pattern, true, false).draw();
-
             }, 150));
         }
     });
@@ -158,10 +157,32 @@ function attachAssignmentYearListeners() {
     checkboxes.forEach(cb => cb.addEventListener('change', loadAssignments));
 }
 
+// --- Duration segmented-button listeners ---
+function attachDurationListeners() {
+    const buttons = document.querySelectorAll('#durationSelector button');
+
+    buttons.forEach(btn => {
+        btn.addEventListener('click', () => {
+            const newValue = btn.getAttribute("data-duration");
+            if (!newValue) return;
+
+            currentDuration = newValue;
+
+            // Update button visual state
+            buttons.forEach(b => b.classList.remove("active"));
+            btn.classList.add("active");
+
+            console.log(`⏳ Duration changed → ${currentDuration}`);
+            loadAssignments();
+        });
+    });
+}
+
 // --- Primary entry point, called when tab is activated ---
 function initAssignments() {
     console.log("📘 Initializing Assignments tab");
 
     attachAssignmentYearListeners();
+    attachDurationListeners();
     loadAssignments();
 }
