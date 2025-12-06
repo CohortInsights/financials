@@ -7,6 +7,41 @@ from financials import db as db_module
 from financials.web import app
 
 
+# ------------------------------------------
+# NEW HELPERS FOR PERIOD SORTING
+# ------------------------------------------
+def extract_year(period_str: str) -> int:
+    """Extract numeric year from '2025', '2025-Q1', '2025-01'."""
+    try:
+        return int(period_str[:4])
+    except Exception:
+        return 0
+
+
+def extract_period(period_str: str) -> int:
+    """
+    Convert quarter or month into sortable integer:
+        Q1 → 1, Q2 → 2 ...
+        2025-01 → 1, 2025-12 → 12
+        Year-only (e.g. '2025') → 0
+    """
+    if "Q" in period_str:
+        try:
+            return int(period_str.split("Q")[1])
+        except Exception:
+            return 0
+
+    # Monthly pattern YYYY-MM
+    parts = period_str.split("-")
+    if len(parts) == 2 and parts[1].isdigit():
+        try:
+            return int(parts[1])
+        except Exception:
+            return 0
+
+    return 0
+
+
 def respond_with_format(df: pd.DataFrame, filename: str):
     """
     Return df as JSON or CSV depending on ?format= argument.
@@ -70,17 +105,6 @@ def _should_expand(args) -> bool:
 def group_by_assignment_time_period(df: pd.DataFrame, args):
     """
     Group transactions by assignment and time period.
-
-    Returns DataFrame with:
-        period, assignment, count, amount, level
-
-    If ?expand=true is present, also adds hierarchical roll-up rows:
-    - For each assignment like A.B.C (level 3), aggregates into parent A.B (level 2)
-    - For each assignment like A.B (level 2), aggregates into parent A (level 1)
-    - Stops at level 1 (no level-0 empty-assignment row)
-    - If a parent already exists, child totals are ADDED to it
-      (count += sum(children.count), amount += sum(children.amount))
-    - If a parent does not exist, it is created.
     """
 
     if df.empty:
@@ -100,7 +124,7 @@ def group_by_assignment_time_period(df: pd.DataFrame, args):
     elif duration == "month":
         df["period"] = df["date"].dt.to_period("M").astype(str)
 
-    else:  # duration == "year" (default)
+    else:  # duration == "year"
         df["period"] = df["date"].dt.year.astype(str)
 
     # Base grouping: period + assignment
@@ -116,31 +140,23 @@ def group_by_assignment_time_period(df: pd.DataFrame, args):
     # Replace NaN assignment with empty string
     grouped["assignment"] = grouped["assignment"].fillna("")
 
-    # Level = number of dots + 1; treat empty assignment as level 1
+    # Level = number of dots + 1; empty assignment → level 1
     grouped["level"] = grouped["assignment"].apply(
         lambda a: a.count(".") + 1 if a else 1
     )
 
-    # Normalize amount to exactly 2 decimal places
+    # Normalize amount
     grouped["amount"] = grouped["amount"].astype(float).round(2)
 
-    # ----------------------------------------------------
-    # Optional hierarchical expansion: ?expand=true
-    # ----------------------------------------------------
+    # Hierarchical roll-up if expand=true
     if _should_expand(args):
-        # Work from deepest level down to level 2, rolling up into parents
         max_level = int(grouped["level"].max())
 
-        # We never generate level 0 parents; stop when we have produced level 1.
         for level in range(max_level, 1, -1):
-            # Children at this level
             children = grouped[grouped["level"] == level].copy()
             if children.empty:
                 continue
 
-            # Derive parent assignment by stripping the last segment after '.'
-            # e.g. "Expense.Auto.Fuel" -> "Expense.Auto"
-            # Only rows that actually have a dot can produce parents
             mask_has_dot = children["assignment"].str.contains(r"\.")
             children = children[mask_has_dot].copy()
             if children.empty:
@@ -152,7 +168,6 @@ def group_by_assignment_time_period(df: pd.DataFrame, args):
                 .iloc[:, 0]
             )
 
-            # Aggregate by (period, parent_assignment)
             parent_agg = (
                 children.groupby(["period", "parent_assignment"], as_index=False)
                 .agg(
@@ -161,7 +176,6 @@ def group_by_assignment_time_period(df: pd.DataFrame, args):
                 )
             )
 
-            # For each parent, either update existing row or create a new one
             for _, row in parent_agg.iterrows():
                 period = row["period"]
                 parent_assignment = row["parent_assignment"]
@@ -174,15 +188,9 @@ def group_by_assignment_time_period(df: pd.DataFrame, args):
                 )
 
                 if existing_mask.any():
-                    # Add to existing parent
-                    grouped.loc[existing_mask, "count"] = (
-                        grouped.loc[existing_mask, "count"] + add_count
-                    )
-                    grouped.loc[existing_mask, "amount"] = (
-                        grouped.loc[existing_mask, "amount"] + add_amount
-                    )
+                    grouped.loc[existing_mask, "count"] += add_count
+                    grouped.loc[existing_mask, "amount"] += add_amount
                 else:
-                    # Create new parent row
                     parent_level = parent_assignment.count(".") + 1 if parent_assignment else 1
                     new_row = {
                         "period": period,
@@ -191,16 +199,22 @@ def group_by_assignment_time_period(df: pd.DataFrame, args):
                         "amount": add_amount,
                         "level": parent_level,
                     }
-                    grouped = pd.concat(
-                        [grouped, pd.DataFrame([new_row])],
-                        ignore_index=True,
-                    )
+                    grouped = pd.concat([grouped, pd.DataFrame([new_row])], ignore_index=True)
 
-        # Re-normalize amount after roll-ups
         grouped["amount"] = grouped["amount"].astype(float).round(2)
 
-    # Final sort: level (outer), then assignment (inner)
-    grouped = grouped.sort_values(["level", "assignment"]).reset_index(drop=True)
+    # ----------------------------------------------------
+    # NEW: Add → Sort → Drop temporary sorting fields
+    # ----------------------------------------------------
+    grouped["tmp_year"]   = grouped["period"].apply(extract_year)
+    grouped["tmp_period"] = grouped["period"].apply(extract_period)
+
+    grouped = grouped.sort_values(
+        ["tmp_period", "assignment", "tmp_year"],
+        ascending=[True, True, True]
+    ).reset_index(drop=True)
+
+    grouped = grouped.drop(columns=["tmp_year", "tmp_period"])
 
     return grouped
 

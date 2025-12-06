@@ -71,7 +71,11 @@ function buildAssignmentsTable(data) {
                 render: () => ""   // Blank for now
             }
         ],
-        order: [[0, 'desc']],
+
+        // NEW: Disable all client-side sorting and respect backend order fully
+        order: [],
+        ordering: false,
+
         scrollY: '70vh',
         scrollCollapse: true,
         paging: true,
