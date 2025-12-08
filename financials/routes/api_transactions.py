@@ -204,17 +204,32 @@ def group_by_assignment_time_period(df: pd.DataFrame, args):
         grouped["amount"] = grouped["amount"].astype(float).round(2)
 
     # ----------------------------------------------------
-    # NEW: Add → Sort → Drop temporary sorting fields
+    # NEW LOGIC: compute assignment_amount_sum using ABS(amount)
+    # ----------------------------------------------------
+    total_amount_by_assignment = grouped.groupby("assignment")["amount"].apply(lambda s: s.abs().sum())
+    grouped["assignment_amount_sum"] = grouped["assignment"].map(total_amount_by_assignment)
+
+    # ----------------------------------------------------
+    # Existing tmp_year / tmp_period logic
     # ----------------------------------------------------
     grouped["tmp_year"]   = grouped["period"].apply(extract_year)
     grouped["tmp_period"] = grouped["period"].apply(extract_period)
 
+    # ----------------------------------------------------
+    # FINAL SORT ORDER (your specification):
+    #   tmp_period
+    #   assignment_amount_sum (DESC)
+    #   tmp_year
+    # ----------------------------------------------------
     grouped = grouped.sort_values(
-        ["tmp_period", "assignment", "tmp_year"],
-        ascending=[True, True, True]
+        ["tmp_period", "assignment_amount_sum", "tmp_year"],
+        ascending=[True, False, True]
     ).reset_index(drop=True)
 
-    grouped = grouped.drop(columns=["tmp_year", "tmp_period"])
+    # ----------------------------------------------------
+    # Remove temporary columns
+    # ----------------------------------------------------
+    grouped = grouped.drop(columns=["assignment_amount_sum", "tmp_year", "tmp_period"])
 
     return grouped
 
