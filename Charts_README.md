@@ -27,15 +27,16 @@ Charts **never reach back to the server** for aggregate values.
 
 The system follows this philosophy:
 
-1. **User filtering controls the level structure**  
-2. **The first level containing more than one assignment is the major level**  
+1. **User filtering controls the levels that appear in the table**  
+2. **Starting from level 1,2,3 the first level containing more than one assignment is dubbed the "major" level**  
 3. **A chart is either allowed or disallowed**  
-4. If disallowed, a **modal dialog** explains *every* reason  
-5. Client charting uses **Plotly** or similar, with minimal data massaging  
-6. Server prepares consistent data including `sort_year` and `sort_period`  
-7. Missing time periods are treated as **zero amounts**, not absent data  
-
-The goal is consistent, predictable chart behavior, not a “best guess” chart.
+4. If disallowed, a **modal dialog** explains *every* reason (not just the first encountered one)  
+5. Client charting uses **Plotly** or similar, with minimal data massaging, Do NOT perform data integrity checks in charting layaer
+6. Server prepares consistent data including `sort_year` and `sort_period".  
+7. The server performs all data roll ups
+8. Missing time periods are treated as **zero amounts**, not absent data
+9. The goal is consistent, predictable chart behavior, not a “best guess” chart,
+C0. Chart properties that the operator may change are in a "parameters" section of the chart type
 
 ───────────────────────────────────────────────────────────────────────────────
 
@@ -100,7 +101,8 @@ Before rendering:
 ### Mixed-sign rules:
 - Pie chart → **disallowed**  
 - Stacked area → **disallowed**  
-- Bar charts → **allowed** (positive upward, negative downward)  
+- Bar charts → **allowed** (positive upward, negative downward). 
+- When mixed-sign and multiple years are present, the cluster is ordered by year only i.e. positive & negative values within the same time period are in the same cluster
 
 ───────────────────────────────────────────────────────────────────────────────
 
@@ -146,7 +148,8 @@ If any fail → disallowed with reasons.
 - Multi-chart limit: If >4 pies → show warning and use grid layout.  
 - Slices represent the minor values **within the same major layer**.  
 - Slice labels use **shortest unique trailing fragment**.  
-- “Other” rule: slices < 5% of total combine into “Other”.
+- “Other” rule: slices < {min_fraction} of total combine into “Other”.
+- Producing warning if number of pie charts > {max_chart_count}
 
 ───────────────────────────────────────────────────────────────────────────────
 
@@ -169,11 +172,12 @@ Bar charts are **very flexible** and support:
 
 ### Bar axis:
 - Always **assignment axis**, except special case:
-  - If exactly **one major assignment**, bar axis = **period axis**
+  - If exactly **one major assignment** and multiple periods are present, bar axis = **period axis**
 
 ### Amount axis:
-- Always vertical (y) for vertical bars  
-- Zero is centered if mixed-sign
+- Always vertical (y) for vertical bars 
+- Always horizontal (x) for horizontal vars
+- Zero is centered up/down (vertical) or left/right (horizontal) if mixed-sign
 
 ───────────────────────────────────────────────────────────────────────────────
 
@@ -183,15 +187,20 @@ Bar charts are **very flexible** and support:
 - One **chart row per period** (Q1, Q2, Q3, Q4)
 - Within each row:
   - Bars are grouped by assignment OR  
-  - If one assignment, bars along x-axis represent periods
+  - If one assignment, bars along non bar axis represent periods
 
 ### If **Ym** (multiple years):
 - Each period row contains **clusters of bars**, one per year:
-  Example:
-
+  Example for quarterly with same sign: 3 cluster years (2023,2024, 2025):
       Q1 row:
-         [2023 Expense] [2024 Expense] [2025 Expense]
-         [2023 Income ] [2024 Income ] [2025 Income ]
+        [2023-Q1 Expense] [2024-Q1 Expense] [2025-Q1 Expense]
+      Q2 row
+        [2023-Q1 Expense ] [2024-Q1 Expense ] [2025-Q1 Expense ]
+  Example for mixed-sign quarterly with income(+) and expense(-): 2 cluster years (2023,2024):
+      Q1 row:
+        [2023-Q1 Income (up), Expense(down)] [2024-Q1 Income (up), Expense(down)]
+      Q2 row
+        [2023-Q2 Income (up), Expense(down)] [2024-Q2 Income (up), Expense(down)]
 
 ───────────────────────────────────────────────────────────────────────────────
 
@@ -205,7 +214,6 @@ Simple bar allowed if:
 4. Mixed-sign allowed  
 
 If >1 assignment at major level AND minor levels absent → still simple bars.
-
 Simple bars are used unless minor levels force stacking.
 
 ───────────────────────────────────────────────────────────────────────────────
@@ -232,21 +240,21 @@ Interpretation:
 Stacked area chart is allowed only if:
 
 1. **sort_period_count > 1 (Pm)**  
-2. Exactly one major assignment OR multiple assignments with **no minor levels**  
+2. Exactly one major assignment OR multiple assignments
 3. **All values are same-sign** (no mixed-sign values)  
 4. There is a meaningful time series on x-axis
 
 Disallowed if:
 
 - Mixed-sign amounts  
-- Only one period (P1)  
-- Minor levels present AND multiple major assignments
+- Only one period (P1)
 
 ## 6.2 Behavior When Allowed
 
+- Only rows for major level are processed; rows with level < major level are ignored
 - x-axis = chronological periods  
-- y-axis = values (or absolute if negative-only)  
-- Assignment dimension or minor dimension forms the stacked layers  
+- y-axis = amount value (or absolute if negative-only)  
+- Each distinct assignment value is a stacked layer
 - Default y-values are **integrals across time**, but raw series may be another mode  
 
 ───────────────────────────────────────────────────────────────────────────────
@@ -288,7 +296,20 @@ Always determined by **the table order**, which is server-defined by:
 - Sorting assignments by **sum of absolute amounts** across the dataset.
 
 ### Stack ordering:
-Bottom to top = table order (largest at the bottom).
+Bottom to top = table order (largest values in the table are at the bottom stack layer).
+Parent Bar height: SOLELY determined by amount of major row (NOT sum of child segments!!!) 
+Segment height: Solely determined by amount of child (Sum of child segments ARE OFTEN LESS than height of parent bar!!!)
+Bar colors: Best to use a parent color distinct from segment color.  This will make it obvious when sum of segment heights < parent height
+Example:
+  Expense.Travel -10000
+  Expense.Travel.Air -5320
+  Expense.Travel.Lodging -2100
+  Expense.Entertainment  -8000
+  Two bars (Travel,Entertainment) with heights of 10000 and 8000.
+  The Entertainment bar is all blue with no segments
+  The Travel bar from bottom to top has two yellow segments (Air,Lodging with heights of 5320 and 2100)
+  The top segment of the Travel bar is blue (no label). The blue height is (10000 - 5320 - 2100 = 3700)
+  IMPLEMENTATION NOTE: Van be thought of as plotting a blue bar with height 10000 and overlaying two opaque bottom yellow segments (heights of 5320 and 2100)
 
 ### Area ordering:
 Same as stacked bar ordering.
@@ -304,8 +325,8 @@ Example structure:
     {
       "chart_type": "pie",
       "parameters": {
-        "min_slice_fraction": 0.05,
-        "max_pies_without_warning": 4
+        "min_fraction": 0.05,
+        "max_chart_count": 4
       },
       "disallowed": {
         "mixed_sign": true,
@@ -448,11 +469,11 @@ Allowed:
 
 ───────────────────────────────────────────────────────────────────────────────
 
-# Example G: Multi-Level, Multi-Year, Multi-Period (Single Major Assignment)
+# Example G: Multi-Level, Multi-Year, Multi-Period (Single Major Level)
 
 Meta:
 
-    major_level = 2 (exactly 1 assignment)
+    major_level = 2
     minor_levels = [3]
     sort_year = Ym
     sort_period = Pm
@@ -460,8 +481,8 @@ Meta:
 
 Allowed:
 
-- Stacked area → allowed only if all same sign  
-- Stacked bar → allowed  
+- Stacked area → disallowed (minors exist)
+- Stacked bar → allowed
 - Simple bar → disallowed (minors exist)  
 - Pie → disallowed (Pm + Ym + sign rules)
 
@@ -481,11 +502,12 @@ Meta:
 
 Allowed:
 
-- Stacked bar chart → YES  
+- Simple bar chart → YES if there are no minor data rows
   - Clusters by year  
-  - Bars for each period  
-  - Stacks = Expense, Income (one positive, one negative)
-- Simple bar → NO (more than one assignment)
+  - Chart rows for each period  
+  - Stacks = Each year cluster contains positive bar (up) and negative bar (down)
+- Stacked bar chart -> YES (if there ARE minor data rows)
+  - Just like simple bar chart with minor data appearing as segments
 - Pie → NO (mixed sign + multi-year + multi-period)
 - Stacked area → NO (mixed sign)
 
@@ -524,7 +546,7 @@ The compute system:
   - Zero-fill missing periods  
   - Apply abs(values) for all-negative charts  
   - Prepare cluster structures (years)  
-  - Derive shortest unique labels  
+  - Derive shortest unique labels
 
 All ordering, filtering, collapsing, and hierarchy interpretation are upstream.
 
