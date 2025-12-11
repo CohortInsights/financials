@@ -1,0 +1,81 @@
+{
+  "fonts": {
+    "family": "Arial, sans-serif",
+    "title_size": 20,
+    "axis_title_size": 16,
+    "axis_tick_size": 14,
+    "legend_size": 14,
+    "slice_label_size": 14
+  },
+
+  "colors": {
+    "background": "#ffffff",
+    "plot_background": "#ffffff",
+    "grid_color": "#e5e5e5"
+  },
+
+  "palettes": {
+    "p4": [
+      "#1f77b4",
+      "#ff7f0e",
+      "#2ca02c",
+      "#d62728"
+    ],
+    "p8": [
+      "#1f77b4",
+      "#ff7f0e",
+      "#2ca02c",
+      "#d62728",
+      "#9467bd",
+      "#8c564b",
+      "#e377c2",
+      "#7f7f7f"
+    ],
+    "p16": [
+      "#1f77b4",
+      "#ff7f0e",
+      "#2ca02c",
+      "#d62728",
+      "#9467bd",
+      "#8c564b",
+      "#e377c2",
+      "#7f7f7f",
+      "#bcbd22",
+      "#17becf",
+      "#aec7e8",
+      "#ffbb78",
+      "#98df8a",
+      "#ff9896",
+      "#c5b0d5",
+      "#c49c94"
+    ]
+  },
+
+  "layout": {
+    "margin_top": 40,
+    "margin_bottom": 40,
+    "margin_left": 60,
+    "margin_right": 40,
+    "legend_position": "right",
+    "show_grid": true,
+    "show_legend": true,
+    "hovermode": "closest"
+  },
+
+  "axis_defaults": {
+    "x": {
+      "showline": true,
+      "linewidth": 1,
+      "linecolor": "#000000",
+      "showgrid": true,
+      "tickangle": 0
+    },
+    "y": {
+      "showline": true,
+      "linewidth": 1,
+      "linecolor": "#000000",
+      "showgrid": true,
+      "tickformat": ",.0f"
+    }
+  }
+}

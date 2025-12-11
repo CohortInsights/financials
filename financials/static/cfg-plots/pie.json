@@ -1,0 +1,35 @@
+{
+  "chart_type": "pie",
+
+  "parameters": {
+    "min_fraction": 0.05,
+    "max_chart_count": 4
+  },
+
+  "eligibility": {
+    "requires_major_level": true,
+    "requires_single_year": true,
+    "requires_single_period": true,
+    "requires_no_minor_levels": true,
+    "requires_same_sign": true
+  },
+
+  "disallowed_conditions": {
+    "no_major_level": "No major level found",
+    "multiple_years": "Pie chart requires a single year (Y1)",
+    "multiple_periods": "Pie chart requires a single period (P1)",
+    "has_minor_levels": "Pie chart requires no minor levels",
+    "mixed_sign": "Pie chart requires all-positive or all-negative values"
+  },
+
+  "interpretation": {
+    "use_major_level_as_pie": true,
+    "absolute_if_negative_only": true,
+    "one_pie_per_major_assignment": true,
+    "collapse_small_slices_into_other": true
+  },
+
+  "labeling": {
+    "shortest_unique_fragment": true
+  }
+}

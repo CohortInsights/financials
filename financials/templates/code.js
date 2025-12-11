@@ -10,6 +10,17 @@ function reloadPage() {
 document.addEventListener('DOMContentLoaded', function() {
     console.log("📦 Initializing dashboard shell");
 
+    // -------------------------------------------------------------
+    // ⭐ NEW: Initialize Bootstrap tooltips for all elements w/ title
+    // -------------------------------------------------------------
+    const tooltipTriggerList = [].slice.call(
+        document.querySelectorAll('[data-bs-toggle="tooltip"], [title]')
+    );
+    tooltipTriggerList.forEach(function (el) {
+        new bootstrap.Tooltip(el);
+    });
+    // -------------------------------------------------------------
+
     // Attach reload button listener
     const reloadButton = document.getElementById('reloadButton');
     if (reloadButton) reloadButton.addEventListener('click', reloadPage);
@@ -22,7 +33,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     // -------------------------------------------------------------
-    // ⭐ NEW: Initialize Assignments ONLY when its tab is activated
+    // ⭐ Initialize Assignments ONLY when its tab is activated
     // -------------------------------------------------------------
     let assignmentsInitialized = false;
 

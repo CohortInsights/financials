@@ -81,7 +81,23 @@ function buildAssignmentsTable(data) {
         paging: true,
         initComplete: addAssignmentFilters
     });
+
+    // ------------------------------------------------------------------
+    // PATCH 1: After DataTable builds, refresh chart availability
+    // ------------------------------------------------------------------
+    if (window.Charting && typeof Charting.refresh === "function") {
+        Charting.refresh();
+    }
 }
+
+// ----------------------------------------------------------------------
+// PATCH 2: When the Assignments table redraws, refresh chart availability
+// ----------------------------------------------------------------------
+$(document).on('draw.dt', '#assignments', function () {
+    if (window.Charting && typeof Charting.refresh === "function") {
+        Charting.refresh();
+    }
+});
 
 // --- Add ONLY the Assignment + Level filters ---
 function addAssignmentFilters() {
@@ -185,6 +201,13 @@ function attachDurationListeners() {
 // --- Primary entry point, called when tab is activated ---
 function initAssignments() {
     console.log("📘 Initializing Assignments tab");
+
+    // ------------------------------------------------------------------
+    // PATCH 3: Initialize Charting UI (menu handlers, etc.)
+    // ------------------------------------------------------------------
+    if (window.Charting && typeof Charting.init === "function") {
+        Charting.init();
+    }
 
     attachAssignmentYearListeners();
     attachDurationListeners();

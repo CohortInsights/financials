@@ -107,6 +107,22 @@
                     <button type="button" class="btn btn-outline-primary" data-duration="month">Month</button>
                 </div>
 
+                <!-- CHART MENU DROPDOWN (PATCH A) -->
+                <div class="btn-group ms-3">
+                    <button type="button"
+                            class="btn btn-outline-secondary dropdown-toggle"
+                            data-bs-toggle="dropdown"
+                            aria-expanded="false">
+                        Chart
+                    </button>
+                    <ul class="dropdown-menu">
+                        <li><a class="dropdown-item" href="#" id="chart-menu-pie">Pie Chart</a></li>
+                        <li><a class="dropdown-item disabled" href="#">Simple Bar</a></li>
+                        <li><a class="dropdown-item disabled" href="#">Stacked Bar</a></li>
+                        <li><a class="dropdown-item disabled" href="#">Stacked Area</a></li>
+                    </ul>
+                </div>
+
             </div>
 
             <table id="assignments" class="display" style="width:100%">
@@ -172,61 +188,39 @@
     </div>
 </div>
 
-<!-- Add Rule Modal -->
-<div class="modal fade" id="addRuleModal" tabindex="-1" aria-labelledby="addRuleLabel" aria-hidden="true">
-  <div class="modal-dialog">
-    <div class="modal-content">
+<!-- CHART MODAL (PATCH B) -->
+<div class="modal fade" id="chart-modal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-xl">
+    <div class="modal-content" style="padding:0;">
       <div class="modal-header">
-        <h5 class="modal-title" id="addRuleLabel">Add New Rule</h5>
-        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        <h5 class="modal-title" id="chart-modal-title">Chart</h5>
+        <button type="button"
+                class="btn-close"
+                data-bs-dismiss="modal"
+                aria-label="Close"></button>
       </div>
-      <div class="modal-body">
-        <form id="addRuleForm">
-          <div class="mb-2">
-            <label class="form-label">Priority</label>
-            <input name="priority" type="number" class="form-control" required>
+
+      <div class="modal-body" style="padding:0;">
+        <div class="d-flex" style="width:100%; height:70vh;">
+
+          <div id="chart-modal-left"
+               style="flex:0 0 30%; padding:1rem; border-right:1px solid #ddd;">
+            <button id="chart-generate-btn"
+                    class="btn btn-primary w-100 mb-3">
+              Generate Chart
+            </button>
           </div>
 
-          <div class="mb-2">
-            <label class="form-label">Source</label>
-            <input name="source" type="text" class="form-control">
+          <div id="chart-modal-right"
+               style="flex:1 1 70%; padding:1rem;">
+            <div id="chart-canvas"
+                 style="width:100%; height:100%; background:#f8f9fa;">
+            </div>
           </div>
 
-          <div class="mb-2">
-            <label class="form-label">Description</label>
-            <input name="description" type="text" class="form-control">
-          </div>
-
-          <div class="mb-2">
-            <label class="form-label">Min Amount</label>
-            <input name="min_amount" type="number" class="form-control">
-          </div>
-
-          <div class="mb-2">
-            <label class="form-label">Max Amount</label>
-            <input name="max_amount" type="number" class="form-control">
-          </div>
-
-          <div class="mb-2">
-            <label class="form-label">Start Date</label>
-            <input name="start_date" type="date" class="form-control">
-          </div>
-
-          <div class="mb-2">
-            <label class="form-label">End Date</label>
-            <input name="end_date" type="date" class="form-control">
-          </div>
-
-          <div class="mb-2">
-            <label class="form-label">Assignment</label>
-            <input name="assignment" type="text" class="form-control" required>
-          </div>
-        </form>
+        </div>
       </div>
-      <div class="modal-footer">
-        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-        <button type="button" id="saveRuleBtn" class="btn btn-primary">Save Rule</button>
-      </div>
+
     </div>
   </div>
 </div>
@@ -248,6 +242,8 @@
 <script src="templates/transactions.js" defer></script>
 <script src="templates/rules.js" defer></script>
 <script src="templates/assignments.js" defer></script>
+<script src="templates/chart.js" defer></script>
+
 
 </body>
 </html>

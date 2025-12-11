@@ -296,3 +296,7 @@ table.dataTable tfoot input {
     background-color: #e8f0ff;
     color: #0d6efd;
 }
+
+.dropdown-item.disabled {
+    pointer-events: auto !important;
+}
