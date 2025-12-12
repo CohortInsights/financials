@@ -26,6 +26,7 @@ logging.basicConfig(
 # ------------------------------------------------------------
 import financials.routes.dashboard      # noqa: F401
 import financials.routes.api_transactions  # noqa: F401
+import financials.routes.charts
 import financials.routes.assign            # noqa: F401
 import financials.routes.rules             # noqa: F401
 

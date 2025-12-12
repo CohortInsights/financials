@@ -31,7 +31,6 @@ def extract_period(period_str: str) -> int:
         except Exception:
             return 0
 
-    # Monthly pattern YYYY-MM
     parts = period_str.split("-")
     if len(parts) == 2 and parts[1].isdigit():
         try:
@@ -40,6 +39,14 @@ def extract_period(period_str: str) -> int:
             return 0
 
     return 0
+
+
+def _should_zero_fill(args) -> bool:
+    """
+    Return True if the caller requested zero-fill via ?zero-fill=true/1/yes.
+    """
+    val = args.get("zero-fill", "").strip().lower()
+    return val in ("1", "true", "yes", "y")
 
 
 def respond_with_format(df: pd.DataFrame, filename: str):
@@ -57,7 +64,6 @@ def respond_with_format(df: pd.DataFrame, filename: str):
             headers={"Content-Disposition": f"attachment; filename={filename}"}
         )
 
-    # JSON response
     return jsonify(df.to_dict(orient="records"))
 
 
@@ -88,16 +94,178 @@ def compute_transactions(args):
         if "amount" in df.columns:
             df["amount"] = df["amount"].fillna(0)
 
-        # Replace NaN with empty strings for JSON safety
         df = df.replace({np.nan: ""})
 
     return df
 
 
+def compute_assignment_meta(df):
+    """
+    Compute derived meta information from a filtered assignment table.
+    """
+    if df.empty:
+        return {
+            "major_level": None,
+            "minor_levels": [],
+            "major_assignment_count": 0,
+            "sort_year_count": 0,
+            "sort_period_count": 0,
+            "sign": "none"
+        }
+
+    level_assignment_counts = (
+        df.groupby("level")["assignment"]
+        .nunique()
+        .sort_index()
+    )
+
+    major_level = None
+    for lvl, cnt in level_assignment_counts.items():
+        if cnt > 1:
+            major_level = lvl
+            break
+
+    minor_levels = []
+    if major_level is not None:
+        minor_levels = [
+            lvl for lvl in level_assignment_counts.index
+            if lvl > major_level
+        ]
+
+    if major_level is not None:
+        major_assignment_count = (
+            df[df["level"] == major_level]["assignment"].nunique()
+        )
+    else:
+        major_assignment_count = df["assignment"].nunique()
+
+    sort_year_count = df["sort_year"].nunique()
+    sort_period_count = df["sort_period"].nunique()
+
+    amounts = df["amount"]
+    has_positive = (amounts > 0).any()
+    has_negative = (amounts < 0).any()
+
+    if has_positive and has_negative:
+        sign = "mixed"
+    elif has_positive:
+        sign = "positive"
+    elif has_negative:
+        sign = "negative"
+    else:
+        sign = "zero"
+
+    return {
+        "major_level": major_level,
+        "minor_levels": minor_levels,
+        "major_assignment_count": major_assignment_count,
+        "sort_year_count": sort_year_count,
+        "sort_period_count": sort_period_count,
+        "sign": sign
+    }
+
+
+def compute_assignments(args, *, filters=None, zero_fill=False) -> tuple[pd.DataFrame, dict]:
+    """
+    Compute the canonical assignment table and its derived metadata.
+    """
+    df = compute_transactions(args)
+    df = group_by_assignment_time_period(df, args)
+
+    if filters:
+        asn = filters.get("asn")
+        level = filters.get("level")
+
+        if asn:
+            tokens = [
+                t.strip().lower()
+                for t in asn.split(",")
+                if t.strip()
+            ]
+            if tokens:
+                df = df[
+                    df["assignment"]
+                    .str.lower()
+                    .apply(lambda s: any(tok in s for tok in tokens))
+                ]
+
+        if level:
+            levels = {
+                int(t.strip())
+                for t in level.split(",")
+                if t.strip().isdigit()
+            }
+            if levels:
+                df = df[df["level"].isin(levels)]
+
+    # Meta must describe the FINAL dataset
+    meta = compute_assignment_meta(df)
+
+    # ---------------------------------------------
+    # ZERO-FILL (explicit, chart-oriented)
+    # ---------------------------------------------
+    if zero_fill:
+        df = zero_fill_assignment_periods(df, meta)
+
+    return df, meta
+
+
+def zero_fill_assignment_periods(df: pd.DataFrame, meta: dict) -> pd.DataFrame:
+    """
+    Zero-fill missing (assignment, sort_year, sort_period) combinations
+    for time-series data only.
+
+    This is a view-normalization step intended for charting.
+    """
+
+    # -------------------------------------------------
+    # EARLY EXIT: not a time series
+    # -------------------------------------------------
+    if (
+            meta.get("sort_year_count", 0) <= 1
+            and meta.get("sort_period_count", 0) <= 1
+    ):
+        return df
+
+    if df.empty:
+        return df
+
+    # -------------------------------------------------
+    # Build full index of expected combinations
+    # -------------------------------------------------
+    assignments = (
+        df[["assignment", "level"]]
+        .drop_duplicates()
+        .reset_index(drop=True)
+    )
+
+    periods = (
+        df[["sort_year", "sort_period", "period"]]
+        .drop_duplicates()
+        .reset_index(drop=True)
+    )
+
+    full_index = assignments.merge(periods, how="cross")
+
+    # -------------------------------------------------
+    # Merge existing data onto full index
+    # -------------------------------------------------
+    merged = full_index.merge(
+        df,
+        on=["assignment", "level", "sort_year", "sort_period", "period"],
+        how="left",
+    )
+
+    # -------------------------------------------------
+    # Fill missing values
+    # -------------------------------------------------
+    merged["count"] = merged["count"].fillna(0).astype(int)
+    merged["amount"] = merged["amount"].fillna(0.0).astype(float)
+
+    return merged
+
+
 def _should_expand(args) -> bool:
-    """
-    Return True if the caller requested hierarchical expansion via ?expand=true/1/yes.
-    """
     val = args.get("expand", "").strip().lower()
     return val in ("1", "true", "yes", "y")
 
@@ -106,28 +274,22 @@ def group_by_assignment_time_period(df: pd.DataFrame, args):
     """
     Group transactions by assignment and time period.
     """
-
     if df.empty:
-        return df  # nothing to group
+        return df
 
     duration = args.get("duration", "year").lower()
 
-    # Ensure date is datetime
     if "date" in df.columns and not pd.api.types.is_datetime64_any_dtype(df["date"]):
         df["date"] = pd.to_datetime(df["date"], errors="coerce")
 
-    # Build the period column depending on duration
     if duration == "quarter":
         df["period"] = df["date"].dt.to_period("Q").astype(str)
         df["period"] = df["period"].str.replace("Q", "-Q", regex=False)
-
     elif duration == "month":
         df["period"] = df["date"].dt.to_period("M").astype(str)
-
-    else:  # duration == "year"
+    else:
         df["period"] = df["date"].dt.year.astype(str)
 
-    # Base grouping: period + assignment
     grouped = (
         df.groupby(["period", "assignment"], dropna=False)
         .agg(
@@ -137,28 +299,20 @@ def group_by_assignment_time_period(df: pd.DataFrame, args):
         .reset_index()
     )
 
-    # Replace NaN assignment with empty string
     grouped["assignment"] = grouped["assignment"].fillna("")
-
-    # Level = number of dots + 1; empty assignment → level 1
     grouped["level"] = grouped["assignment"].apply(
         lambda a: a.count(".") + 1 if a else 1
     )
-
-    # Normalize amount
     grouped["amount"] = grouped["amount"].astype(float).round(2)
 
-    # Hierarchical roll-up if expand=true
     if _should_expand(args):
         max_level = int(grouped["level"].max())
-
         for level in range(max_level, 1, -1):
             children = grouped[grouped["level"] == level].copy()
             if children.empty:
                 continue
 
-            mask_has_dot = children["assignment"].str.contains(r"\.")
-            children = children[mask_has_dot].copy()
+            children = children[children["assignment"].str.contains(r"\.")]
             if children.empty:
                 continue
 
@@ -177,59 +331,44 @@ def group_by_assignment_time_period(df: pd.DataFrame, args):
             )
 
             for _, row in parent_agg.iterrows():
-                period = row["period"]
-                parent_assignment = row["parent_assignment"]
-                add_count = row["count"]
-                add_amount = float(row["amount"])
-
-                existing_mask = (
-                    (grouped["period"] == period)
-                    & (grouped["assignment"] == parent_assignment)
+                mask = (
+                        (grouped["period"] == row["period"]) &
+                        (grouped["assignment"] == row["parent_assignment"])
                 )
-
-                if existing_mask.any():
-                    grouped.loc[existing_mask, "count"] += add_count
-                    grouped.loc[existing_mask, "amount"] += add_amount
+                if mask.any():
+                    grouped.loc[mask, "count"] += row["count"]
+                    grouped.loc[mask, "amount"] += row["amount"]
                 else:
-                    parent_level = parent_assignment.count(".") + 1 if parent_assignment else 1
-                    new_row = {
-                        "period": period,
-                        "assignment": parent_assignment,
-                        "count": add_count,
-                        "amount": add_amount,
-                        "level": parent_level,
-                    }
-                    grouped = pd.concat([grouped, pd.DataFrame([new_row])], ignore_index=True)
+                    grouped = pd.concat([
+                        grouped,
+                        pd.DataFrame([{
+                            "period": row["period"],
+                            "assignment": row["parent_assignment"],
+                            "count": row["count"],
+                            "amount": row["amount"],
+                            "level": row["parent_assignment"].count(".") + 1
+                        }])
+                    ], ignore_index=True)
 
         grouped["amount"] = grouped["amount"].astype(float).round(2)
 
-    # ----------------------------------------------------
-    # NEW LOGIC: compute assignment_amount_sum using ABS(amount)
-    # ----------------------------------------------------
-    total_amount_by_assignment = grouped.groupby("assignment")["amount"].apply(lambda s: s.abs().sum())
+    total_amount_by_assignment = (
+        grouped.groupby("assignment")["amount"]
+        .apply(lambda s: s.abs().sum())
+    )
     grouped["assignment_amount_sum"] = grouped["assignment"].map(total_amount_by_assignment)
 
-    # ----------------------------------------------------
-    # Existing tmp_year / tmp_period logic
-    # ----------------------------------------------------
-    grouped["tmp_year"]   = grouped["period"].apply(extract_year)
-    grouped["tmp_period"] = grouped["period"].apply(extract_period)
+    # Canonical sort fields (persisted internally)
+    grouped["sort_year"] = grouped["period"].apply(extract_year)
+    grouped["sort_period"] = grouped["period"].apply(extract_period)
 
-    # ----------------------------------------------------
-    # FINAL SORT ORDER (your specification):
-    #   tmp_period
-    #   assignment_amount_sum (DESC)
-    #   tmp_year
-    # ----------------------------------------------------
     grouped = grouped.sort_values(
-        ["tmp_period", "assignment_amount_sum", "tmp_year"],
+        ["sort_period", "assignment_amount_sum", "sort_year"],
         ascending=[True, False, True]
     ).reset_index(drop=True)
 
-    # ----------------------------------------------------
-    # Remove temporary columns
-    # ----------------------------------------------------
-    grouped = grouped.drop(columns=["assignment_amount_sum", "tmp_year", "tmp_period"])
+    # Drop only non-canonical helper
+    grouped = grouped.drop(columns=["assignment_amount_sum"])
 
     return grouped
 
@@ -242,6 +381,39 @@ def api_transactions():
 
 @app.route("/api/assigned_transactions")
 def assigned_transactions():
-    df = compute_transactions(request.args)
-    df = group_by_assignment_time_period(df, request.args)
+    df,meta = compute_assignments(request.args)
+    df.drop(columns=["sort_year", "sort_period"], inplace=True, errors="ignore")
+
     return respond_with_format(df, "assigned_transactions.csv")
+
+
+@app.route("/api/assignment_meta")
+def api_assignment_meta():
+    filters = {
+        "asn": request.args.get("asn"),
+        "level": request.args.get("level"),
+    }
+
+    df,meta = compute_assignments(
+        request.args,
+        filters=filters,
+        zero_fill=False
+    )
+
+    return jsonify(meta)
+
+
+@app.route("/api/filtered_assignments")
+def api_filtered_assignments():
+    filters = {
+        "asn": request.args.get("asn"),
+        "level": request.args.get("level"),
+    }
+
+    df,meta = compute_assignments(
+        request.args,
+        filters=filters,
+        zero_fill=_should_zero_fill(request.args)
+    )
+
+    return respond_with_format(df, "filtered_assignments.csv")

@@ -1,0 +1,54 @@
+{
+  "version": "1.0",
+
+  "defaults": {
+    "min_fraction": 0.05,
+    "max_chart_count": 4,
+    "max_warning_chart_count": 4
+  },
+
+  "labeling": {
+    "strategies": {
+      "shortest_unique_trailing_fragment": {
+        "description": "Use the shortest suffix of an assignment path that uniquely identifies each label within its peer set"
+      }
+    },
+    "default_strategy": "shortest_unique_trailing_fragment"
+  },
+
+  "sign_handling": {
+    "negative_only_mode": "absolute",
+    "mixed_sign_supported_charts": [
+      "bar"
+    ]
+  },
+
+  "time_conventions": {
+    "year_key": "sort_year",
+    "period_key": "sort_period",
+    "period_labels": {
+      "annual": "Y",
+      "quarterly": "Q",
+      "monthly": "M"
+    }
+  },
+
+  "ordering": {
+    "assignment_order": "table_order_by_abs_amount",
+    "stack_order": "table_order_bottom_up",
+    "area_order": "table_order_bottom_up"
+  },
+
+  "layout": {
+    "multi_chart_grid": {
+      "max_columns": 2
+    }
+  },
+
+  "rendering": {
+    "backend": "matplotlib",
+    "output_format": "png",
+    "dpi": 150,
+    "tight_layout": true
+  }
+}
