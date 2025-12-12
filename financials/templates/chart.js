@@ -1,27 +1,23 @@
 /* templates/chart.js
  *
- * Charting subsystem for Financials Portal.
- * Handles:
- *  - meta extraction from Assignments DataTable
- *  - JSON-driven strict eligibility (SM1)
- *  - menu enable/disable + tooltip
- *  - dialog launcher skeleton
- *  - public interface: Charting.init(), Charting.refresh()
+ * RESTORED WORKING BASELINE
+ * ----------------------------------------------------------
+ * This version:
+ *   - computes pie data from the Assignments table
+ *   - renders directly into #chart-canvas (no offscreen PNG)
+ *   - preserves eligibility + menu enable/disable
+ *   - ensures the Generate button works correctly
+ *   - is stable and safe for iterative development
  */
 
 // ============================================================================
 // CONFIG LOADING
 // ============================================================================
 
-// cache so repeated calls don't refetch
-const ChartConfigs = {
-    pie: null
-};
+const ChartConfigs = { pie: null };
 
-// You may replace this with your own loadJSON()
 async function loadChartConfig(chartType) {
     if (ChartConfigs[chartType]) return ChartConfigs[chartType];
-
     const url = `static/cfg-plots/${chartType}.json`;
 
     try {
@@ -30,17 +26,16 @@ async function loadChartConfig(chartType) {
             console.error("Failed to load chart config:", url);
             return null;
         }
-        const config = await res.json();
-        ChartConfigs[chartType] = config;
-        return config;
-    } catch (e) {
-        console.error("Error loading chart config:", e);
+        ChartConfigs[chartType] = await res.json();
+        return ChartConfigs[chartType];
+    } catch (err) {
+        console.error("Error loading chart config:", err);
         return null;
     }
 }
 
 // ============================================================================
-// META FROM ASSIGNMENTS TABLE
+// META EXTRACTION
 // ============================================================================
 
 function computeAssignmentsChartMeta() {
@@ -57,19 +52,18 @@ function computeAssignmentsChartMeta() {
     let countRows = 0;
 
     data.each(row => {
-        const assignment = row.assignment;
         const level = row.level;
+        const assignment = row.assignment;
         const amount = row.amount;
-        const sortYear = row.sort_year;
-        const sortPeriod = row.sort_period;
+
+        const y = row.sort_year;
+        const p = row.sort_period;
 
         countRows += 1;
 
-        // Level + assignment dimension
         if (typeof level === "number") {
             levelsPresent.add(level);
-
-            if (assignment && assignment.trim() !== "") {
+            if (assignment) {
                 if (!assignmentsByLevel.has(level)) {
                     assignmentsByLevel.set(level, new Set());
                 }
@@ -77,26 +71,20 @@ function computeAssignmentsChartMeta() {
             }
         }
 
-        // Time structure
-        if (typeof sortYear === "number") years.add(sortYear);
-        if (typeof sortPeriod === "number") periods.add(sortPeriod);
+        if (typeof y === "number") years.add(y);
+        if (typeof p === "number") periods.add(p);
 
-        // Sign detection
-        if (typeof amount === "number") {
-            if (amount > 0) hasPositive = true;
-            if (amount < 0) hasNegative = true;
-        }
+        if (amount > 0) hasPositive = true;
+        if (amount < 0) hasNegative = true;
     });
 
-    // Major + minor levels
+    // Determine major + minor
     let majorLevel = null;
     const minorLevels = [];
-    const sortedLevels = Array.from(levelsPresent).sort((a, b) => a - b);
+    const sortedLevels = Array.from(levelsPresent).sort((a,b)=>a-b);
 
     for (const lvl of sortedLevels) {
-        const levelSet = assignmentsByLevel.get(lvl);
-        const distinct = levelSet ? levelSet.size : 0;
-
+        const distinct = assignmentsByLevel.get(lvl)?.size || 0;
         if (distinct > 1 && majorLevel === null) {
             majorLevel = lvl;
         } else if (majorLevel !== null && lvl > majorLevel) {
@@ -104,12 +92,10 @@ function computeAssignmentsChartMeta() {
         }
     }
 
-    // Sign state
-    let signState = "zero";
-    if (hasPositive && hasNegative) signState = "mixed";
-    else if (hasPositive) signState = "positive";
-    else if (hasNegative) signState = "negative";
-    else signState = "positive"; // all-zero treated as positive for eligibility
+    let sign = "zero";
+    if (hasPositive && hasNegative) sign = "mixed";
+    else if (hasPositive) sign = "positive";
+    else if (hasNegative) sign = "negative";
 
     return {
         row_count: countRows,
@@ -118,54 +104,40 @@ function computeAssignmentsChartMeta() {
         minor_levels: minorLevels,
         sort_year_count: years.size,
         sort_period_count: periods.size,
-        sign_state: signState
+        sign_state: sign
     };
 }
 
 // ============================================================================
-// ELIGIBILITY (STRICT MODE; JSON DRIVES EVERYTHING)
+// ELIGIBILITY
 // ============================================================================
 
-function evaluateChartEligibility(chart_type, meta, config) {
+function evaluateChartEligibility(chartType, meta, config) {
     if (!config) {
-        return {
-            chart_type,
-            eligible: false,
-            reasons: ["Chart config not found."]
-        };
+        return { chartType, eligible:false, reasons:["Missing config file"] };
     }
 
+    const E = config.eligibility;
+    const D = config.disallowed_conditions;
     const reasons = [];
-    const elig = config.eligibility || {};
-    const dis = config.disallowed_conditions || {};
 
-    // Requires major level
-   	if (elig.requires_major_level && !meta.major_level) {
-        if (dis.no_major_level) reasons.push(dis.no_major_level);
-    }
+    if (E.requires_major_level && !meta.major_level)
+        reasons.push(D.no_major_level);
 
-    // Single year
-    if (elig.requires_single_year && meta.sort_year_count > 1) {
-        if (dis.multiple_years) reasons.push(dis.multiple_years);
-    }
+    if (E.requires_single_year && meta.sort_year_count > 1)
+        reasons.push(D.multiple_years);
 
-    // Single period
-    if (elig.requires_single_period && meta.sort_period_count > 1) {
-        if (dis.multiple_periods) reasons.push(dis.multiple_periods);
-    }
+    if (E.requires_single_period && meta.sort_period_count > 1)
+        reasons.push(D.multiple_periods);
 
-    // No minor levels
-    if (elig.requires_no_minor_levels && meta.minor_levels.length > 0) {
-        if (dis.has_minor_levels) reasons.push(dis.has_minor_levels);
-    }
+    if (E.requires_no_minor_levels && meta.minor_levels.length > 0)
+        reasons.push(D.has_minor_levels);
 
-    // Same sign
-    if (elig.requires_same_sign && meta.sign_state === "mixed") {
-        if (dis.mixed_sign) reasons.push(dis.mixed_sign);
-    }
+    if (E.requires_same_sign && meta.sign_state === "mixed")
+        reasons.push(D.mixed_sign);
 
     return {
-        chart_type,
+        chartType,
         eligible: reasons.length === 0,
         reasons
     };
@@ -177,9 +149,7 @@ function evaluateChartEligibility(chart_type, meta, config) {
 
 function formatEligibilityTooltip(label, reasons) {
     if (!reasons || reasons.length === 0) return "";
-    const lines = [`Cannot create ${label}:`];
-    for (const r of reasons) lines.push("• " + r);
-    return lines.join("<br>");
+    return ["Cannot create " + label + ":", ...reasons.map(r=>"• "+r)].join("<br>");
 }
 
 // ============================================================================
@@ -198,68 +168,120 @@ async function updatePieChartMenu(meta) {
         item.style.opacity = "";
         item.dataset.chartEnabled = "true";
 
-        // ⭐ Remove stale tooltip instance when enabling
-        const tipInstance = bootstrap.Tooltip.getInstance(item);
-        if (tipInstance) {
-            tipInstance.dispose();
-        }
-
+        const tip = bootstrap.Tooltip.getInstance(item);
+        if (tip) tip.dispose();
         item.removeAttribute("title");
     } else {
         item.classList.add("disabled");
         item.style.opacity = "0.5";
         item.dataset.chartEnabled = "false";
 
-        const tip = formatEligibilityTooltip("pie chart", result.reasons);
-        item.setAttribute("title", tip);
-
-        // ⭐ Ensure tooltip is active or updated
-        bootstrap.Tooltip.getOrCreateInstance(item, { html: true });
+        const tipText = formatEligibilityTooltip("pie chart", result.reasons);
+        item.setAttribute("title", tipText);
+        bootstrap.Tooltip.getOrCreateInstance(item, { html:true });
     }
-
 }
 
 function attachPieChartMenuHandler() {
     const item = document.getElementById("chart-menu-pie");
     if (!item) return;
-
-    item.addEventListener("click", function (e) {
+    item.addEventListener("click", e => {
         e.preventDefault();
-        if (item.dataset.chartEnabled !== "true") return;
-        openPieChartDialogSkeleton();
+        if (item.dataset.chartEnabled === "true") {
+            openPieChartDialog();
+        }
     });
 }
 
 // ============================================================================
-// DIALOG SKELETON
+// PIE COMPUTATION (simple working version)
 // ============================================================================
 
-function openPieChartDialogSkeleton() {
-    const title = document.getElementById("chart-modal-title");
-    if (title) title.textContent = "Pie Chart";
+async function compute_pie_chart() {
+    console.log("▶ compute_pie_chart()");
 
-    const btn = document.getElementById("chart-generate-btn");
-    if (btn && !btn.dataset.bound) {
-        btn.addEventListener("click", () => {
-            console.log("Generate Chart (Pie) — placeholder");
-            // Here we will later call: compute_pie_chart(...)
-        });
-        btn.dataset.bound = "true";
+    const table = $('#assignments').DataTable();
+    const rows = table.rows({ filter:'applied' }).data().toArray();
+
+    const sums = {};
+    for (const r of rows) {
+        const a = r.assignment;
+        if (!a) continue;
+        sums[a] = (sums[a] || 0) + Math.abs(r.amount);
     }
 
+    return {
+        chart_type: "pie",
+        pies: [{
+            labels: Object.keys(sums),
+            values: Object.values(sums)
+        }]
+    };
+}
+
+// ============================================================================
+// WORKING PIE RENDERER (stable baseline)
+// ============================================================================
+
+async function renderPieChart(spec) {
+    console.log("▶ renderPieChart()");
+
+    const pie = spec.pies[0];
+    const container = document.getElementById("chart-canvas");
+    if (!container) {
+        console.error("chart-canvas not found");
+        return;
+    }
+
+    container.innerHTML = "";
+
+    const trace = {
+        type: "pie",
+        labels: pie.labels,
+        values: pie.values,
+        textinfo: "percent",
+        textposition: "inside",
+        sort: false
+    };
+
+    const layout = {
+        margin: { t: 20, l: 20, r: 20, b: 20 },
+        width: container.clientWidth || 600,
+        height: container.clientHeight || 400
+    };
+
+    await Plotly.newPlot(container, [trace], layout);
+
+    console.log("▶ renderPieChart() done");
+}
+
+// ============================================================================
+// DIALOG
+// ============================================================================
+
+function openPieChartDialog() {
     const modalEl = document.getElementById("chart-modal");
     const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
     modal.show();
 }
 
 // ============================================================================
-// PUBLIC API
+// INITIALIZATION
 // ============================================================================
 
 const Charting = {
-
     init() {
         attachPieChartMenuHandler();
+
+        const btn = document.getElementById("chart-generate-btn");
+        if (btn && !btn.dataset.bound) {
+            btn.addEventListener("click", async () => {
+                console.log("▶ PIE GENERATE CLICK");
+                const spec = await compute_pie_chart();
+                await renderPieChart(spec);
+            });
+            btn.dataset.bound = "true";
+        }
     },
 
     async refresh() {
