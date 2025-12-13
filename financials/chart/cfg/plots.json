@@ -2,9 +2,12 @@
   "version": "1.0",
 
   "defaults": {
-    "min_fraction": 0.05,
+    "min_fraction": 0.03,
     "max_chart_count": 4,
-    "max_warning_chart_count": 4
+    "rendering": {
+      "figure_inches": 5,
+      "dpi": 150
+    }
   },
 
   "labeling": {
@@ -52,3 +55,4 @@
     "tight_layout": true
   }
 }
+

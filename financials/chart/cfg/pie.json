@@ -8,35 +8,38 @@
     },
     "max_chart_count": {
       "source": "plots.defaults.max_chart_count",
-      "overridable": true
+      "overridable": false,
+      "value": 4
     },
     "max_warning_chart_count": {
       "source": "plots.defaults.max_warning_chart_count",
-      "overridable": true
+      "overridable": false,
+      "value": 4
     }
   },
 
   "eligibility": {
     "requires_major_level": true,
     "forbids_minor_levels": true,
-    "requires_single_year": true,
-    "requires_single_period": true,
-    "requires_same_sign": true
+    "requires_single_year": false,
+    "requires_single_period": false,
+    "requires_same_sign": true,
+    "max_periods": 4
   },
 
   "disallowed_reasons": {
     "no_major_level": "Only one distinct assignment found. At least two are needed for a pie chart",
     "minor_levels_present": "Minor levels are present (cannot plot slices for more than one level)",
-    "multiple_years": "Multiple years are present (pie charts require exactly one year)",
-    "multiple_periods": "Multiple periods are present (pie charts require exactly one period)",
-    "mixed_sign": "Mixed positive and negative values are not allowed for pie charts"
+    "mixed_sign": "Mixed positive and negative values are not allowed for pie charts",
+    "too_many_periods": "Too many periods selected (maximum of 4 pie charts allowed)"
   },
 
   "interpretation": {
     "uses_major_level": true,
     "uses_minor_level": false,
     "abs_for_negative_only": true,
-    "slice_basis": "major_level_rows"
+    "slice_basis": "major_level_rows",
+    "multi_chart_dimension": "period"
   },
 
   "labeling": {
@@ -47,7 +50,7 @@
     "multi_pie_behavior": {
       "enabled": true,
       "grid_layout": true,
-      "warn_if_exceeds_max": true
+      "warn_if_exceeds_max": false
     }
   },
 
