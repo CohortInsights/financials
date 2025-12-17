@@ -234,49 +234,29 @@ def compute_pie(*, ax, labels, values, title, chart_spec) -> None:
     ax.axis("equal")
 
 def _normalize_args(args: dict) -> tuple[dict, list[int] | None]:
+    """
+    Normalize query arguments.
+    - Extract multi-year intent from year=2023,2024
+    """
     args = args.copy()
-
-    year_arg = args.get("year")
     years = None
 
+    year_arg = args.get("year")
     if isinstance(year_arg, str) and "," in year_arg:
         try:
             years = [int(y.strip()) for y in year_arg.split(",")]
-            del args["year"]   # IMPORTANT
+            del args["year"]
         except ValueError:
             raise ChartConfigError(f"Invalid year filter: {year_arg}")
 
     return args, years
 
-def compute_chart(
-    *,
-    chart_type: str,
-    args: dict,
-    filters: dict | None = None,
-) -> bytes:
+def _load_chart_data(args, filters, years):
     """
-    Full server-side charting pipeline.
-    Returns PNG image bytes.
+    Load canonical chart data.
+    Expands multi-year requests into per-year fetches.
     """
-
-    # ------------------------------------------------------------
-    # 0. Normalize arguments (extract multi-year intent)
-    # ------------------------------------------------------------
     args = args.copy()
-
-    year_arg = args.get("year")
-    years = None
-
-    if isinstance(year_arg, str) and "," in year_arg:
-        try:
-            years = [int(y.strip()) for y in year_arg.split(",")]
-            del args["year"]   # IMPORTANT: do not pass list downstream
-        except ValueError:
-            raise ChartConfigError(f"Invalid year filter: {year_arg}")
-
-    # ------------------------------------------------------------
-    # 1. Acquire canonical data + metadata
-    # ------------------------------------------------------------
     args["expand"] = "1"
 
     if years:
@@ -295,28 +275,31 @@ def compute_chart(
 
             if not df_y.empty:
                 dfs.append(df_y)
-                meta = meta_y   # metadata shape is consistent
+                meta = meta_y
 
         if not dfs:
             raise ChartDataError("No data available for chart")
 
         df = pd.concat(dfs, ignore_index=True)
+        return df, meta
 
-    else:
-        df, meta = compute_assignments(
-            args,
-            filters=filters,
-            zero_fill=False,
-        )
+    df, meta = compute_assignments(
+        args,
+        filters=filters,
+        zero_fill=False,
+    )
 
-        if df.empty:
-            raise ChartDataError("No data available for chart")
+    if df.empty:
+        raise ChartDataError("No data available for chart")
 
+    return df, meta
+
+def _apply_row_reducers(df, meta):
+    """
+    Apply row-level reductions before aggregation.
+    """
     warnings: list[dict] = []
 
-    # ------------------------------------------------------------
-    # 2. Row-level reductions (BEFORE grouping / Other)
-    # ------------------------------------------------------------
     if meta.get("sign") == "mixed":
         df, warning = reduce_mixed_sign(df)
         if warning:
@@ -325,37 +308,16 @@ def compute_chart(
         if df.empty:
             raise ChartDataError("No data remaining after mixed-sign reduction")
 
-    # ------------------------------------------------------------
-    # 3. Eligibility evaluation (legacy rules still apply)
-    # ------------------------------------------------------------
-    allowed_result, chart_spec = evaluate_eligibility(
-        chart_type=chart_type,
-        meta=meta,
-    )
+    return df, warnings
 
-    if not allowed_result["eligible"]:
-        raise ChartNotAllowedError(allowed_result)
-
-    if chart_type != "pie":
-        raise ChartConfigError(f"Unsupported chart type: {chart_type}")
-
-    # ------------------------------------------------------------
-    # 4. Extract resolved spec components
-    # ------------------------------------------------------------
+def _resolve_chart_context(chart_spec, args, meta, df):
+    """
+    Resolve duration, split dimension, titles, layout, and chart keys.
+    """
     interpretation = chart_spec["interpretation"]
-    other_cfg = chart_spec.get("other_slice", {})
     eligibility_cfg = chart_spec.get("eligibility", {})
     layout_cfg = chart_spec["layout"]["multi_pie_behavior"]
 
-    min_fraction = chart_spec["parameters"].get("min_fraction")
-
-    rendering = chart_spec["rendering"]
-    cell_inches = rendering.get("figure_inches", 5)
-    dpi = rendering.get("dpi", 150)
-
-    # ------------------------------------------------------------
-    # 5. Title context (intent-based, from query args)
-    # ------------------------------------------------------------
     duration = args.get("duration", "year")
 
     duration_label = {
@@ -370,16 +332,8 @@ def compute_chart(
         "duration_label": duration_label,
     }
 
-    title_cfg = chart_spec.get("title", {})
-    title_template = title_cfg.get("template", "")
+    title_template = chart_spec.get("title", {}).get("template", "")
 
-    def render_title(template: str, ctx: dict) -> str:
-        title = template.format(**ctx)
-        return " ".join(title.split())
-
-    # ------------------------------------------------------------
-    # 6. Determine split dimension strictly from duration
-    # ------------------------------------------------------------
     if duration == "year":
         dimension = "sort_year"
     else:
@@ -396,16 +350,83 @@ def compute_chart(
     if max_charts is not None:
         keys = keys[:max_charts]
 
+    return {
+        "dimension": dimension,
+        "keys": keys,
+        "layout_cfg": layout_cfg,
+        "title_ctx": title_ctx,
+        "title_template": title_template,
+        "duration": duration,
+    }
+
+def compute_chart(
+    *,
+    chart_type: str,
+    args: dict,
+    filters: dict | None = None,
+) -> bytes:
+    """
+    Full server-side charting pipeline.
+    Returns PNG image bytes.
+    """
+
+    if chart_type != "pie":
+        raise ChartConfigError(f"Unsupported chart type: {chart_type}")
+
     # ------------------------------------------------------------
-    # 7. Create figure + axes
+    # 0. Normalize args
     # ------------------------------------------------------------
-    use_grid = layout_cfg.get("grid_layout", False)
+    args, years = _normalize_args(args)
+
+    # ------------------------------------------------------------
+    # 1. Load data
+    # ------------------------------------------------------------
+    df, meta = _load_chart_data(args, filters, years)
+
+    # ------------------------------------------------------------
+    # 2. Row-level reductions
+    # ------------------------------------------------------------
+    df, warnings = _apply_row_reducers(df, meta)
+
+    # ------------------------------------------------------------
+    # 3. Eligibility (legacy)
+    # ------------------------------------------------------------
+    allowed_result, chart_spec = evaluate_eligibility(
+        chart_type=chart_type,
+        meta=meta,
+    )
+
+    if not allowed_result["eligible"]:
+        raise ChartNotAllowedError(allowed_result)
+
+    # ------------------------------------------------------------
+    # 4. Resolve chart context
+    # ------------------------------------------------------------
+    ctx = _resolve_chart_context(chart_spec, args, meta, df)
+
+    interpretation = chart_spec["interpretation"]
+    other_cfg = chart_spec.get("other_slice", {})
+    min_fraction = chart_spec["parameters"].get("min_fraction")
+
+    rendering = chart_spec["rendering"]
+    cell_inches = rendering.get("figure_inches", 5)
+    dpi = rendering.get("dpi", 150)
+
+    keys = ctx["keys"]
+    dimension = ctx["dimension"]
+
+    def render_title(template: str, ctx: dict) -> str:
+        title = template.format(**ctx)
+        return " ".join(title.split())
+
+    # ------------------------------------------------------------
+    # 5. Create figure
+    # ------------------------------------------------------------
+    use_grid = ctx["layout_cfg"].get("grid_layout", False)
 
     if use_grid and len(keys) > 1:
-        max_columns = 2
-        cols = min(max_columns, len(keys))
+        cols = min(2, len(keys))
         rows = (len(keys) + cols - 1) // cols
-
         fig, axes = plt.subplots(
             rows,
             cols,
@@ -417,7 +438,7 @@ def compute_chart(
         axes = [ax]
 
     # ------------------------------------------------------------
-    # 8. Render each pie
+    # 6. Render pies
     # ------------------------------------------------------------
     for idx, key in enumerate(keys):
         ax = axes[idx]
@@ -430,48 +451,33 @@ def compute_chart(
         )
 
         values = grouped["amount"]
+        if interpretation.get("abs_for_negative_only", False) and (values < 0).any():
+            values = values.abs()
 
-        if interpretation.get("abs_for_negative_only", False):
-            if (values < 0).any():
-                values = values.abs()
+        labels = [a.split(".")[-1] for a in grouped["assignment"].tolist()]
 
-        labels = [
-            a.split(".")[-1]
-            for a in grouped["assignment"].tolist()
-        ]
-
-        # ---- Other slice logic (AFTER reductions) ----
         if other_cfg.get("enabled") and min_fraction is not None:
             total = values.abs().sum()
-            if total > 0:
-                kept_labels = []
-                kept_values = []
-                other_total = 0.0
+            kept_labels, kept_values, other_total = [], [], 0.0
 
-                for lbl, val in zip(labels, values):
-                    if abs(val) / total < min_fraction:
-                        other_total += val
-                    else:
-                        kept_labels.append(lbl)
-                        kept_values.append(val)
+            for lbl, val in zip(labels, values):
+                if abs(val) / total < min_fraction:
+                    other_total += val
+                else:
+                    kept_labels.append(lbl)
+                    kept_values.append(val)
 
-                if other_total != 0:
-                    kept_labels.append(other_cfg.get("label", "Other"))
-                    kept_values.append(other_total)
+            if other_total != 0:
+                kept_labels.append(other_cfg.get("label", "Other"))
+                kept_values.append(other_total)
 
-                labels = kept_labels
-                values = kept_values
-            else:
-                values = values.tolist()
+            labels = kept_labels
+            values = kept_values
         else:
             values = values.tolist()
 
-        base_title = render_title(title_template, title_ctx)
-
-        if len(keys) > 1:
-            title = f"{base_title} — {key}" if base_title else str(key)
-        else:
-            title = base_title or str(key)
+        base_title = render_title(ctx["title_template"], ctx["title_ctx"])
+        title = f"{base_title} — {key}" if len(keys) > 1 and base_title else base_title or str(key)
 
         compute_pie(
             ax=ax,
@@ -485,13 +491,11 @@ def compute_chart(
         axes[j].axis("off")
 
     # ------------------------------------------------------------
-    # 9. Encode PNG (with warnings rendered)
+    # 7. Finalize
     # ------------------------------------------------------------
     buf = io.BytesIO()
     plt.tight_layout()
-
     render_warnings(fig, warnings)
-
     fig.savefig(buf, format="png", dpi=dpi)
     plt.close(fig)
     buf.seek(0)
