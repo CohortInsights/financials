@@ -1,6 +1,7 @@
 from typing import Dict, Any, List
 import json
 from pathlib import Path
+import pandas as pd
 import io
 
 import matplotlib.pyplot as plt
@@ -232,6 +233,21 @@ def compute_pie(*, ax, labels, values, title, chart_spec) -> None:
     ax.set_title(title)
     ax.axis("equal")
 
+def _normalize_args(args: dict) -> tuple[dict, list[int] | None]:
+    args = args.copy()
+
+    year_arg = args.get("year")
+    years = None
+
+    if isinstance(year_arg, str) and "," in year_arg:
+        try:
+            years = [int(y.strip()) for y in year_arg.split(",")]
+            del args["year"]   # IMPORTANT
+        except ValueError:
+            raise ChartConfigError(f"Invalid year filter: {year_arg}")
+
+    return args, years
+
 def compute_chart(
     *,
     chart_type: str,
@@ -244,17 +260,57 @@ def compute_chart(
     """
 
     # ------------------------------------------------------------
+    # 0. Normalize arguments (extract multi-year intent)
+    # ------------------------------------------------------------
+    args = args.copy()
+
+    year_arg = args.get("year")
+    years = None
+
+    if isinstance(year_arg, str) and "," in year_arg:
+        try:
+            years = [int(y.strip()) for y in year_arg.split(",")]
+            del args["year"]   # IMPORTANT: do not pass list downstream
+        except ValueError:
+            raise ChartConfigError(f"Invalid year filter: {year_arg}")
+
+    # ------------------------------------------------------------
     # 1. Acquire canonical data + metadata
     # ------------------------------------------------------------
     args["expand"] = "1"
-    df, meta = compute_assignments(
-        args,
-        filters=filters,
-        zero_fill=False,
-    )
 
-    if df.empty:
-        raise ChartDataError("No data available for chart")
+    if years:
+        dfs = []
+        meta = None
+
+        for y in years:
+            args_y = args.copy()
+            args_y["year"] = str(y)
+
+            df_y, meta_y = compute_assignments(
+                args_y,
+                filters=filters,
+                zero_fill=False,
+            )
+
+            if not df_y.empty:
+                dfs.append(df_y)
+                meta = meta_y   # metadata shape is consistent
+
+        if not dfs:
+            raise ChartDataError("No data available for chart")
+
+        df = pd.concat(dfs, ignore_index=True)
+
+    else:
+        df, meta = compute_assignments(
+            args,
+            filters=filters,
+            zero_fill=False,
+        )
+
+        if df.empty:
+            raise ChartDataError("No data available for chart")
 
     warnings: list[dict] = []
 
@@ -322,9 +378,12 @@ def compute_chart(
         return " ".join(title.split())
 
     # ------------------------------------------------------------
-    # 6. Determine split dimension
+    # 6. Determine split dimension strictly from duration
     # ------------------------------------------------------------
-    dimension = interpretation.get("multi_chart_dimension", "period")
+    if duration == "year":
+        dimension = "sort_year"
+    else:
+        dimension = interpretation.get("multi_chart_dimension", "period")
 
     if dimension not in df.columns:
         raise ChartConfigError(
