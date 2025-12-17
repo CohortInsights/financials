@@ -18,20 +18,24 @@
     }
   },
 
-  "eligibility": {
-    "requires_major_level": true,
-    "forbids_minor_levels": true,
-    "requires_single_year": false,
-    "requires_single_period": false,
-    "requires_same_sign": true,
-    "max_periods": 4
+  "data_patterns": {
+    "minor_levels_present": true,
+    "multiple_periods_present": true,
+    "mixed_sign_present": true,
+    "greater_than_max_charts": true
   },
 
-  "disallowed_reasons": {
-    "no_major_level": "Only one distinct assignment found. At least two are needed for a pie chart",
-    "minor_levels_present": "Minor levels are present (cannot plot slices for more than one level)",
-    "mixed_sign": "Mixed positive and negative values are not allowed for pie charts",
-    "too_many_periods": "Too many periods selected (maximum of 4 pie charts allowed)"
+  "pattern_policies": {
+    "minor_levels_present": "ignore_minor_rows_and_warn",
+    "multiple_periods_present": "chart_per_period",
+    "mixed_sign_present": "ignore_minor_fraction_and_warn",
+    "greater_than_max_charts": "limit_to_max_and_warn"
+  },
+
+  "warning_catalog": {
+    "minor_levels_present": "$amount ($rows rows) of minor levels were ignored",
+    "mixed_sign_present": "$amount ($rows rows) of $sign values were ignored",
+    "greater_than_max_charts": "$rows charts beyond the first $max were ignored"
   },
 
   "interpretation": {
