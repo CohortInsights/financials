@@ -12,6 +12,36 @@ from financials.routes.api_transactions import compute_assignments
 
 CFG_DIR = Path(__file__).resolve().parent / "cfg"
 
+def render_warnings(fig, warnings, *, fontsize=8):
+    """
+    Render warning footnotes at the bottom of the figure.
+    """
+    if not warnings:
+        return
+
+    lines = []
+    for w in warnings:
+        if w["code"] == "mixed_sign_present":
+            amount = f"${w['amount']:,.0f}"
+            rows = w["rows"]
+            sign = w["sign"]
+            lines.append(f"* {amount} ({rows} rows) of {sign} values were ignored")
+
+    if not lines:
+        return
+
+    text = "\n".join(lines)
+
+    fig.text(
+        0.5,
+        0.01,
+        text,
+        ha="center",
+        va="bottom",
+        fontsize=fontsize,
+        color="gray",
+    )
+
 
 def load_chart_spec(chart_type: str) -> dict:
     """
@@ -186,17 +216,35 @@ def compute_pie(*, ax, labels, values, title, chart_spec) -> None:
     ax.axis("equal")
 
 
-def compute_chart(*, chart_type: str, args: dict, filters: dict | None = None) -> bytes:
+def compute_chart(
+    *,
+    chart_type: str,
+    args: dict,
+    filters: dict | None = None,
+) -> bytes:
+    """
+    Full server-side charting pipeline.
+    Returns PNG image bytes.
+    """
 
+    # ------------------------------------------------------------
+    # 1. Acquire canonical data + metadata
+    # ------------------------------------------------------------
     args["expand"] = "1"
-    df, meta = compute_assignments(args, filters=filters, zero_fill=False)
+    df, meta = compute_assignments(
+        args,
+        filters=filters,
+        zero_fill=False,
+    )
 
     if df.empty:
         raise ChartDataError("No data available for chart")
 
     warnings: list[dict] = []
 
-    # --- Mixed-sign reduction (row-level, before grouping/Other) ---
+    # ------------------------------------------------------------
+    # 2. Row-level reductions (BEFORE grouping / Other)
+    # ------------------------------------------------------------
     if meta.get("sign") == "mixed":
         df, warning = reduce_mixed_sign(df)
         if warning:
@@ -205,6 +253,9 @@ def compute_chart(*, chart_type: str, args: dict, filters: dict | None = None) -
         if df.empty:
             raise ChartDataError("No data remaining after mixed-sign reduction")
 
+    # ------------------------------------------------------------
+    # 3. Eligibility evaluation (legacy rules still apply)
+    # ------------------------------------------------------------
     allowed_result, chart_spec = evaluate_eligibility(
         chart_type=chart_type,
         meta=meta,
@@ -216,8 +267,10 @@ def compute_chart(*, chart_type: str, args: dict, filters: dict | None = None) -
     if chart_type != "pie":
         raise ChartConfigError(f"Unsupported chart type: {chart_type}")
 
+    # ------------------------------------------------------------
+    # 4. Extract resolved spec components
+    # ------------------------------------------------------------
     interpretation = chart_spec["interpretation"]
-    labeling_cfg = chart_spec["labeling"]
     other_cfg = chart_spec.get("other_slice", {})
     eligibility_cfg = chart_spec.get("eligibility", {})
     layout_cfg = chart_spec["layout"]["multi_pie_behavior"]
@@ -228,10 +281,15 @@ def compute_chart(*, chart_type: str, args: dict, filters: dict | None = None) -
     cell_inches = rendering.get("figure_inches", 5)
     dpi = rendering.get("dpi", 150)
 
+    # ------------------------------------------------------------
+    # 5. Determine split dimension
+    # ------------------------------------------------------------
     dimension = interpretation.get("multi_chart_dimension", "period")
 
     if dimension not in df.columns:
-        raise ChartConfigError(f"Required dimension '{dimension}' not found")
+        raise ChartConfigError(
+            f"Required dimension '{dimension}' not found in DataFrame"
+        )
 
     keys = list(dict.fromkeys(df[dimension].tolist()))
 
@@ -239,12 +297,16 @@ def compute_chart(*, chart_type: str, args: dict, filters: dict | None = None) -
     if max_charts is not None:
         keys = keys[:max_charts]
 
+    # ------------------------------------------------------------
+    # 6. Create figure + axes
+    # ------------------------------------------------------------
     use_grid = layout_cfg.get("grid_layout", False)
 
     if use_grid and len(keys) > 1:
         max_columns = 2
         cols = min(max_columns, len(keys))
         rows = (len(keys) + cols - 1) // cols
+
         fig, axes = plt.subplots(
             rows,
             cols,
@@ -255,6 +317,9 @@ def compute_chart(*, chart_type: str, args: dict, filters: dict | None = None) -
         fig, ax = plt.subplots(figsize=(cell_inches, cell_inches))
         axes = [ax]
 
+    # ------------------------------------------------------------
+    # 7. Render each pie
+    # ------------------------------------------------------------
     for idx, key in enumerate(keys):
         ax = axes[idx]
         df_part = df[df[dimension] == key]
@@ -271,8 +336,12 @@ def compute_chart(*, chart_type: str, args: dict, filters: dict | None = None) -
             if (values < 0).any():
                 values = values.abs()
 
-        labels = [a.split(".")[-1] for a in grouped["assignment"].tolist()]
+        labels = [
+            a.split(".")[-1]
+            for a in grouped["assignment"].tolist()
+        ]
 
+        # ---- Other slice logic (AFTER reductions) ----
         if other_cfg.get("enabled") and min_fraction is not None:
             total = values.abs().sum()
             if total > 0:
@@ -309,8 +378,14 @@ def compute_chart(*, chart_type: str, args: dict, filters: dict | None = None) -
     for j in range(len(keys), len(axes)):
         axes[j].axis("off")
 
+    # ------------------------------------------------------------
+    # 8. Encode PNG (with warnings rendered)
+    # ------------------------------------------------------------
     buf = io.BytesIO()
     plt.tight_layout()
+
+    render_warnings(fig, warnings)
+
     fig.savefig(buf, format="png", dpi=dpi)
     plt.close(fig)
     buf.seek(0)
