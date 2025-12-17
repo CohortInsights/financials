@@ -42,6 +42,23 @@ def render_warnings(fig, warnings, *, fontsize=8):
         color="gray",
     )
 
+def duration_to_label(duration: str) -> str:
+    """
+    Map duration to a human-readable label for chart titles.
+    """
+    return {
+        "year": "",
+        "quarter": "Quarterly",
+        "month": "Monthly",
+    }.get(duration, "")
+
+
+def render_title(template: str, ctx: dict) -> str:
+    """
+    Render a title from a template and collapse extra whitespace.
+    """
+    title = template.format(**ctx)
+    return " ".join(title.split())
 
 def load_chart_spec(chart_type: str) -> dict:
     """
@@ -215,7 +232,6 @@ def compute_pie(*, ax, labels, values, title, chart_spec) -> None:
     ax.set_title(title)
     ax.axis("equal")
 
-
 def compute_chart(
     *,
     chart_type: str,
@@ -282,7 +298,31 @@ def compute_chart(
     dpi = rendering.get("dpi", 150)
 
     # ------------------------------------------------------------
-    # 5. Determine split dimension
+    # 5. Title context (intent-based, from query args)
+    # ------------------------------------------------------------
+    duration = args.get("duration", "year")
+
+    duration_label = {
+        "year": "",
+        "quarter": "Quarterly",
+        "month": "Monthly",
+    }.get(duration, "")
+
+    title_ctx = {
+        "asn": args.get("asn", ""),
+        "level": args.get("level", ""),
+        "duration_label": duration_label,
+    }
+
+    title_cfg = chart_spec.get("title", {})
+    title_template = title_cfg.get("template", "")
+
+    def render_title(template: str, ctx: dict) -> str:
+        title = template.format(**ctx)
+        return " ".join(title.split())
+
+    # ------------------------------------------------------------
+    # 6. Determine split dimension
     # ------------------------------------------------------------
     dimension = interpretation.get("multi_chart_dimension", "period")
 
@@ -298,7 +338,7 @@ def compute_chart(
         keys = keys[:max_charts]
 
     # ------------------------------------------------------------
-    # 6. Create figure + axes
+    # 7. Create figure + axes
     # ------------------------------------------------------------
     use_grid = layout_cfg.get("grid_layout", False)
 
@@ -318,7 +358,7 @@ def compute_chart(
         axes = [ax]
 
     # ------------------------------------------------------------
-    # 7. Render each pie
+    # 8. Render each pie
     # ------------------------------------------------------------
     for idx, key in enumerate(keys):
         ax = axes[idx]
@@ -367,11 +407,18 @@ def compute_chart(
         else:
             values = values.tolist()
 
+        base_title = render_title(title_template, title_ctx)
+
+        if len(keys) > 1:
+            title = f"{base_title} — {key}" if base_title else str(key)
+        else:
+            title = base_title or str(key)
+
         compute_pie(
             ax=ax,
             labels=labels,
             values=values,
-            title=str(key),
+            title=title,
             chart_spec=chart_spec,
         )
 
@@ -379,7 +426,7 @@ def compute_chart(
         axes[j].axis("off")
 
     # ------------------------------------------------------------
-    # 8. Encode PNG (with warnings rendered)
+    # 9. Encode PNG (with warnings rendered)
     # ------------------------------------------------------------
     buf = io.BytesIO()
     plt.tight_layout()

@@ -46,6 +46,10 @@
     "multi_chart_dimension": "period"
   },
 
+  "title": {
+  "template": "{asn} (Level {level}) {duration_label}"
+  },
+
   "labeling": {
     "strategy": "shortest_unique_trailing_fragment"
   },
