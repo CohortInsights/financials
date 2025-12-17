@@ -62,6 +62,12 @@
     }
   },
 
+  "warnings": {
+  "mixed_sign_present": "* {amount} ({rows} rows) of {sign} values were ignored",
+  "minor_levels_present": "* {rows} rows from deeper assignment levels were ignored",
+  "max_charts_truncated": "* Only the first {kept} of {total} charts were shown"
+  },
+
   "other_slice": {
     "enabled": true,
     "combine_below_fraction": {

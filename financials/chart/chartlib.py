@@ -13,35 +13,32 @@ from financials.routes.api_transactions import compute_assignments
 
 CFG_DIR = Path(__file__).resolve().parent / "cfg"
 
-def render_warnings(fig, warnings, *, fontsize=8):
-    """
-    Render warning footnotes at the bottom of the figure.
-    """
+
+def render_warnings(fig, warnings, chart_spec, *, fontsize=8):
     if not warnings:
         return
 
+    templates = chart_spec.get("warnings", {})
     lines = []
+
     for w in warnings:
-        if w["code"] == "mixed_sign_present":
-            amount = f"${w['amount']:,.0f}"
-            rows = w["rows"]
-            sign = w["sign"]
-            lines.append(f"* {amount} ({rows} rows) of {sign} values were ignored")
+        template = templates.get(w["code"])
+        if template:
+            lines.append(template.format(**w))
 
     if not lines:
         return
 
-    text = "\n".join(lines)
-
     fig.text(
         0.5,
         0.01,
-        text,
+        "\n".join(lines),
         ha="center",
         va="bottom",
         fontsize=fontsize,
         color="gray",
     )
+
 
 def duration_to_label(duration: str) -> str:
     """
@@ -60,6 +57,7 @@ def render_title(template: str, ctx: dict) -> str:
     """
     title = template.format(**ctx)
     return " ".join(title.split())
+
 
 def load_chart_spec(chart_type: str) -> dict:
     """
@@ -233,6 +231,7 @@ def compute_pie(*, ax, labels, values, title, chart_spec) -> None:
     ax.set_title(title)
     ax.axis("equal")
 
+
 def _normalize_args(args: dict) -> tuple[dict, list[int] | None]:
     """
     Normalize query arguments.
@@ -250,6 +249,7 @@ def _normalize_args(args: dict) -> tuple[dict, list[int] | None]:
             raise ChartConfigError(f"Invalid year filter: {year_arg}")
 
     return args, years
+
 
 def _load_chart_data(args, filters, years):
     """
@@ -294,21 +294,26 @@ def _load_chart_data(args, filters, years):
 
     return df, meta
 
-def _apply_row_reducers(df, meta):
-    """
-    Apply row-level reductions before aggregation.
-    """
+
+def _apply_row_reducers(df, meta, chart_type):
     warnings: list[dict] = []
 
-    if meta.get("sign") == "mixed":
+    if chart_type == "pie" and meta.get("sign") == "mixed":
         df, warning = reduce_mixed_sign(df)
         if warning:
             warnings.append(warning)
-
         if df.empty:
             raise ChartDataError("No data remaining after mixed-sign reduction")
 
+    if chart_type == "pie":
+        df, warning = _reduce_minor_levels(df)   # data-driven depth drop
+        if warning:
+            warnings.append(warning)
+        if df.empty:
+            raise ChartDataError("No data remaining after minor-level reduction")
+
     return df, warnings
+
 
 def _resolve_chart_context(chart_spec, args, meta, df):
     """
@@ -359,11 +364,35 @@ def _resolve_chart_context(chart_spec, args, meta, df):
         "duration": duration,
     }
 
+def _reduce_minor_levels(df):
+    """
+    Drop rows deeper than the shallowest assignment level present.
+    """
+    if "assignment" not in df.columns or df.empty:
+        return df, None
+
+    depths = df["assignment"].apply(lambda a: a.count(".") + 1)
+    major_depth = depths.min()
+
+    mask = depths == major_depth
+    dropped = int((~mask).sum())
+
+    if dropped == 0:
+        return df, None
+
+    warning = {
+        "code": "minor_levels_present",
+        "rows": dropped,
+    }
+
+    return df[mask].copy(), warning
+
+
 def compute_chart(
-    *,
-    chart_type: str,
-    args: dict,
-    filters: dict | None = None,
+        *,
+        chart_type: str,
+        args: dict,
+        filters: dict | None = None,
 ) -> bytes:
     """
     Full server-side charting pipeline.
@@ -386,7 +415,7 @@ def compute_chart(
     # ------------------------------------------------------------
     # 2. Row-level reductions
     # ------------------------------------------------------------
-    df, warnings = _apply_row_reducers(df, meta)
+    df, warnings = _apply_row_reducers(df, meta, chart_type)
 
     # ------------------------------------------------------------
     # 3. Eligibility (legacy)
@@ -495,7 +524,7 @@ def compute_chart(
     # ------------------------------------------------------------
     buf = io.BytesIO()
     plt.tight_layout()
-    render_warnings(fig, warnings)
+    render_warnings(fig, warnings, chart_spec)
     fig.savefig(buf, format="png", dpi=dpi)
     plt.close(fig)
     buf.seek(0)
