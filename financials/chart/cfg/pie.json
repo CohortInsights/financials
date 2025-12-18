@@ -15,6 +15,9 @@
       "source": "plots.defaults.max_warning_chart_count",
       "overridable": false,
       "value": 4
+    },
+    "pct_distance": {
+      "value": 0.70
     }
   },
 

@@ -86,13 +86,16 @@ def load_chart_spec(chart_type: str) -> dict:
     for name, param_spec in chart_spec.get("parameters", {}).items():
         if "value" in param_spec:
             resolved_params[name] = param_spec["value"]
+        elif "pctdistance" in param_spec:
+            resolved_params[name] = param_spec["value"]
         else:
             source = param_spec.get("source")
             if not source or not source.startswith("plots.defaults."):
                 raise ValueError(f"Invalid parameter source for '{name}'")
 
             key = source.replace("plots.defaults.", "")
-            resolved_params[name] = plots_spec["defaults"][key]
+            if plots_spec["defaults"][key]:
+                resolved_params[name] = plots_spec["defaults"][key]
 
     chart_spec["parameters"] = resolved_params
     chart_spec["rendering"] = plots_spec["defaults"].get("rendering", {}).copy()
@@ -166,11 +169,14 @@ def reduce_mixed_sign(df):
 # ------------------------------------------------------------------
 
 def compute_pie(*, ax, labels, values, colors, title, chart_spec) -> None:
+    parameters = chart_spec.get("parameters")
+    pct_distance = parameters.get("pct_distance")
     ax.pie(
         values,
         labels=labels,
         colors=colors,
         autopct="%1.1f%%",
+        pctdistance=pct_distance,
         startangle=90,
     )
     ax.set_title(title)      # ← THIS must be here
@@ -443,6 +449,55 @@ def _compute_grid_layout(n: int) -> tuple[int, int]:
     return rows, cols
 
 
+# ------------------------------------------------------------------
+# Context-wide min_fraction helper
+# ------------------------------------------------------------------
+
+def _compute_global_min_fraction_assignments(
+    df: pd.DataFrame,
+    *,
+    dimension: str,
+    min_fraction: float,
+    use_absolute: bool,
+) -> set[str]:
+    """
+    Compute a global assignment inclusion set using average magnitude
+    across all charts in the current rendering context.
+
+    Returns a set of assignment names to KEEP.
+    """
+
+    if df.empty or "assignment" not in df.columns:
+        return set()
+
+    # Sum per (assignment, chart_key)
+    grouped = (
+        df
+        .groupby(["assignment", dimension], as_index=False)["amount"]
+        .sum()
+    )
+
+    if use_absolute:
+        grouped["amount"] = grouped["amount"].abs()
+
+    # Average per assignment across charts
+    avg_by_assignment = (
+        grouped
+        .groupby("assignment", as_index=False)["amount"]
+        .mean()
+    )
+
+    total = avg_by_assignment["amount"].sum()
+    if total == 0:
+        return set(avg_by_assignment["assignment"].tolist())
+
+    keep = avg_by_assignment[
+        (avg_by_assignment["amount"] / total) >= min_fraction
+    ]["assignment"]
+
+    return set(keep.tolist())
+
+
 def compute_chart(
         *,
         chart_type: str,
@@ -473,16 +528,14 @@ def compute_chart(
     df, warnings = _apply_row_reducers(df, meta, chart_type)
 
     # ------------------------------------------------------------
-    # 3. Load the chart specification
+    # 3. Load chart + plots specs
     # ------------------------------------------------------------
     chart_spec = load_chart_spec(chart_type)
 
-    # Load plots.json for palette configuration
     plots_path = CFG_DIR / "plots.json"
     with open(plots_path, "r") as f:
         plots_spec = json.load(f)
 
-    # Build assignment → color map (scoped to this rendering)
     assignment_colors, color_warnings = _build_assignment_color_map(df, plots_spec)
     warnings.extend(color_warnings)
 
@@ -502,9 +555,23 @@ def compute_chart(
     keys = ctx["keys"]
     dimension = ctx["dimension"]
 
-    def render_title(template: str, ctx: dict) -> str:
-        title = template.format(**ctx)
-        return " ".join(title.split())
+    # ------------------------------------------------------------
+    # 4a. Context-wide min_fraction (multi-chart only)
+    # ------------------------------------------------------------
+    global_keep_assignments = None
+
+    if min_fraction is not None and len(keys) > 1:
+        global_keep_assignments = _compute_global_min_fraction_assignments(
+            df,
+            dimension=dimension,
+            min_fraction=min_fraction,
+            use_absolute=interpretation.get("abs_for_negative_only", False),
+        )
+
+        warnings.append({
+            "code": "min_fraction_applied_across_charts",
+            "charts": len(keys),
+        })
 
     # ------------------------------------------------------------
     # 5. Create figure
@@ -545,17 +612,23 @@ def compute_chart(
         colors = [assignment_colors.get(a) for a in assignments]
 
         if other_cfg.get("enabled") and min_fraction is not None:
-            total = values.abs().sum()
             kept_labels, kept_values, kept_colors = [], [], []
             other_total = 0.0
 
-            for lbl, val, col in zip(labels, values, colors):
-                if abs(val) / total < min_fraction:
-                    other_total += val
+            total = values.abs().sum() if values is not None else 0.0
+
+            for asn, lbl, val, col in zip(assignments, labels, values, colors):
+                if global_keep_assignments is not None:
+                    keep = asn in global_keep_assignments
                 else:
+                    keep = abs(val) / total >= min_fraction if total else True
+
+                if keep:
                     kept_labels.append(lbl)
                     kept_values.append(val)
                     kept_colors.append(col)
+                else:
+                    other_total += val
 
             if other_total != 0:
                 kept_labels.append(other_cfg.get("label", "Other"))
