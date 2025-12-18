@@ -2,10 +2,10 @@
   "version": "1.0",
 
   "defaults": {
-    "min_fraction": 0.01,
+    "min_fraction": 0.025,
     "max_chart_count": 4,
     "rendering": {
-      "figure_inches": 5,
+      "figure_inches": 6,
       "dpi": 150
     }
   },

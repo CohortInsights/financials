@@ -43,7 +43,7 @@
   },
 
   "title": {
-  "template": "{asn} (Level {level}) {duration_label}"
+  "template": "{asn} (L{level}) {duration_label} Total:${sum}"
   },
 
   "labeling": {

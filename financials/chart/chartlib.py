@@ -497,6 +497,29 @@ def _compute_global_min_fraction_assignments(
 
     return set(keep.tolist())
 
+def _render_chart_title(
+    *,
+    template: str,
+    base_ctx: dict,
+    values: list,
+    key=None,
+    multi_chart: bool = False,
+) -> str:
+    """
+    Render a chart title with a per-chart displayed sum.
+    """
+    display_sum = sum(values) if values else 0.0
+
+    title_ctx = dict(base_ctx)
+    title_ctx["sum"] = f"{display_sum:,.2f}"
+
+    base_title = render_title(template, title_ctx)
+
+    if multi_chart and key is not None and base_title:
+        return f"{base_title} — {key}"
+
+    return base_title or (str(key) if key is not None else "")
+
 
 def compute_chart(
         *,
@@ -641,11 +664,12 @@ def compute_chart(
         else:
             values = values.tolist()
 
-        base_title = render_title(ctx["title_template"], ctx["title_ctx"])
-        title = (
-            f"{base_title} — {key}"
-            if len(keys) > 1 and base_title
-            else base_title or str(key)
+        title = _render_chart_title(
+            template=ctx["title_template"],
+            base_ctx=ctx["title_ctx"],
+            values=values,
+            key=key,
+            multi_chart=len(keys) > 1,
         )
 
         compute_pie(
