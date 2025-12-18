@@ -18,13 +18,6 @@
     }
   },
 
-  "data_patterns": {
-    "minor_levels_present": true,
-    "multiple_periods_present": true,
-    "mixed_sign_present": true,
-    "greater_than_max_charts": true
-  },
-
   "pattern_policies": {
     "minor_levels_present": "ignore_minor_rows_and_warn",
     "multiple_periods_present": "chart_per_period",

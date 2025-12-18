@@ -160,75 +160,20 @@ def reduce_mixed_sign(df):
 # Eligibility evaluation (legacy, partially retained)
 # ------------------------------------------------------------------
 
-def evaluate_eligibility(*, chart_type: str, meta: Dict[str, Any]) -> tuple[dict, dict]:
-    """
-    Evaluate remaining eligibility rules for a chart type.
-    Mixed-sign is no longer disqualifying.
-    """
-
-    chart_spec = load_chart_spec(chart_type)
-    eligibility = chart_spec.get("eligibility", {})
-    disallowed_map = chart_spec.get("disallowed_reasons", {})
-
-    reasons: List[str] = []
-    rule_keys: List[str] = []
-
-    if eligibility.get("requires_major_level"):
-        if meta.get("major_assignment_count", 0) < 2:
-            rule_keys.append("no_major_level")
-            reasons.append(disallowed_map.get(
-                "no_major_level",
-                "Insufficient number of distinct assignments"
-            ))
-
-    if eligibility.get("forbids_minor_levels"):
-        if meta.get("minor_levels"):
-            rule_keys.append("minor_levels_present")
-            reasons.append(disallowed_map.get(
-                "minor_levels_present",
-                "Minor levels are present"
-            ))
-
-    if eligibility.get("requires_single_year"):
-        if meta.get("sort_year_count", 0) != 1:
-            rule_keys.append("multiple_years")
-            reasons.append(disallowed_map.get(
-                "multiple_years",
-                "Multiple years are present"
-            ))
-
-    if eligibility.get("requires_single_period"):
-        if meta.get("sort_period_count", 0) != 1:
-            rule_keys.append("multiple_periods")
-            reasons.append(disallowed_map.get(
-                "multiple_periods",
-                "Multiple periods are present"
-            ))
-
-    allowed_result = {
-        "chart_type": chart_type,
-        "eligible": not reasons
-    }
-
-    if reasons:
-        allowed_result["reasons"] = reasons
-        allowed_result["rule_keys"] = rule_keys
-
-    return allowed_result, chart_spec
-
 
 # ------------------------------------------------------------------
 # Chart rendering
 # ------------------------------------------------------------------
 
-def compute_pie(*, ax, labels, values, title, chart_spec) -> None:
+def compute_pie(*, ax, labels, values, colors, title, chart_spec) -> None:
     ax.pie(
         values,
         labels=labels,
+        colors=colors,
         autopct="%1.1f%%",
         startangle=90,
     )
-    ax.set_title(title)
+    ax.set_title(title)      # ← THIS must be here
     ax.axis("equal")
 
 
@@ -387,6 +332,116 @@ def _reduce_minor_levels(df):
 
     return df[mask].copy(), warning
 
+# ------------------------------------------------------------------
+# Color assignment helper
+# ------------------------------------------------------------------
+
+def _build_assignment_color_map(
+    df: pd.DataFrame,
+    plots_spec: dict,
+) -> tuple[dict[str, str], list[dict]]:
+    """
+    Build a deterministic assignment -> color map for a single rendering.
+
+    Colors are assigned based on the distinct assignment order
+    present in the base data table.
+
+    Returns:
+        (assignment_to_color, warnings)
+    """
+
+    warnings: list[dict] = []
+
+    if "assignment" not in df.columns or df.empty:
+        return {}, warnings
+
+    # Preserve original distinct order
+    assignments = list(dict.fromkeys(df["assignment"].tolist()))
+    n = len(assignments)
+
+    palettes = plots_spec.get("palettes", {})
+    palette_defaults = plots_spec.get("palette_defaults", {})
+
+    max_palette_size = int(palette_defaults.get("max_palette_size", 16))
+    reuse_strategy = palette_defaults.get("reuse_strategy", "modulo")
+    reuse_warning = palette_defaults.get("reuse_warning", False)
+    reserved_colors = palette_defaults.get("reserved_colors", {})
+
+    # Exclude reserved synthetic categories from palette assignment
+    real_assignments = [
+        a for a in assignments if a not in reserved_colors
+    ]
+
+    n_real = len(real_assignments)
+
+    # Choose smallest palette >= n_real
+    palette_sizes = sorted(int(k) for k in palettes.keys())
+    selected_size = None
+
+    for size in palette_sizes:
+        if size >= n_real:
+            selected_size = size
+            break
+
+    if selected_size is None:
+        selected_size = max_palette_size
+
+    palette = palettes.get(str(selected_size))
+    if not palette:
+        raise ChartConfigError(f"No palette defined for size {selected_size}")
+
+    assignment_to_color: dict[str, str] = {}
+
+    # Assign colors to real assignments
+    for idx, assignment in enumerate(real_assignments):
+        if idx < len(palette):
+            color = palette[idx]
+        else:
+            if reuse_strategy == "modulo":
+                color = palette[idx % len(palette)]
+            else:
+                raise ChartConfigError(f"Unknown palette reuse strategy: {reuse_strategy}")
+
+        assignment_to_color[assignment] = color
+
+    # Assign reserved colors (e.g. 'Other')
+    for name, color in reserved_colors.items():
+        assignment_to_color[name] = color
+
+    # Emit a single reuse warning if applicable
+    if reuse_warning and n_real > len(palette):
+        warnings.append({
+            "code": "palette_reuse",
+            "assignments": n_real,
+            "palette_size": len(palette),
+        })
+
+    return assignment_to_color, warnings
+
+# ------------------------------------------------------------------
+# Grid layout helper
+# ------------------------------------------------------------------
+def _compute_grid_layout(n: int) -> tuple[int, int]:
+    """
+    Compute a near-square grid layout for n charts.
+
+    Returns:
+        (rows, cols)
+
+    Examples:
+        n=12 -> (3, 4)
+        n=8  -> (3, 3)
+        n=6  -> (2, 3)
+    """
+    if n <= 0:
+        return 0, 0
+
+    # ceil(sqrt(n)) without importing math
+    cols = int((n ** 0.5) + 0.9999)
+    rows = (n + cols - 1) // cols
+
+    return rows, cols
+
 
 def compute_chart(
         *,
@@ -418,15 +473,18 @@ def compute_chart(
     df, warnings = _apply_row_reducers(df, meta, chart_type)
 
     # ------------------------------------------------------------
-    # 3. Eligibility (legacy)
+    # 3. Load the chart specification
     # ------------------------------------------------------------
-    allowed_result, chart_spec = evaluate_eligibility(
-        chart_type=chart_type,
-        meta=meta,
-    )
+    chart_spec = load_chart_spec(chart_type)
 
-    if not allowed_result["eligible"]:
-        raise ChartNotAllowedError(allowed_result)
+    # Load plots.json for palette configuration
+    plots_path = CFG_DIR / "plots.json"
+    with open(plots_path, "r") as f:
+        plots_spec = json.load(f)
+
+    # Build assignment → color map (scoped to this rendering)
+    assignment_colors, color_warnings = _build_assignment_color_map(df, plots_spec)
+    warnings.extend(color_warnings)
 
     # ------------------------------------------------------------
     # 4. Resolve chart context
@@ -454,8 +512,7 @@ def compute_chart(
     use_grid = ctx["layout_cfg"].get("grid_layout", False)
 
     if use_grid and len(keys) > 1:
-        cols = min(2, len(keys))
-        rows = (len(keys) + cols - 1) // cols
+        rows, cols = _compute_grid_layout(len(keys))
         fig, axes = plt.subplots(
             rows,
             cols,
@@ -483,35 +540,46 @@ def compute_chart(
         if interpretation.get("abs_for_negative_only", False) and (values < 0).any():
             values = values.abs()
 
-        labels = [a.split(".")[-1] for a in grouped["assignment"].tolist()]
+        assignments = grouped["assignment"].tolist()
+        labels = [a.split(".")[-1] for a in assignments]
+        colors = [assignment_colors.get(a) for a in assignments]
 
         if other_cfg.get("enabled") and min_fraction is not None:
             total = values.abs().sum()
-            kept_labels, kept_values, other_total = [], [], 0.0
+            kept_labels, kept_values, kept_colors = [], [], []
+            other_total = 0.0
 
-            for lbl, val in zip(labels, values):
+            for lbl, val, col in zip(labels, values, colors):
                 if abs(val) / total < min_fraction:
                     other_total += val
                 else:
                     kept_labels.append(lbl)
                     kept_values.append(val)
+                    kept_colors.append(col)
 
             if other_total != 0:
                 kept_labels.append(other_cfg.get("label", "Other"))
                 kept_values.append(other_total)
+                kept_colors.append(assignment_colors.get("Other"))
 
             labels = kept_labels
             values = kept_values
+            colors = kept_colors
         else:
             values = values.tolist()
 
         base_title = render_title(ctx["title_template"], ctx["title_ctx"])
-        title = f"{base_title} — {key}" if len(keys) > 1 and base_title else base_title or str(key)
+        title = (
+            f"{base_title} — {key}"
+            if len(keys) > 1 and base_title
+            else base_title or str(key)
+        )
 
         compute_pie(
             ax=ax,
             labels=labels,
             values=values,
+            colors=colors,
             title=title,
             chart_spec=chart_spec,
         )

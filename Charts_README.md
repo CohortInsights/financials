@@ -550,9 +550,19 @@ The compute system:
 
 All ordering, filtering, collapsing, and hierarchy interpretation are upstream.
 
+#13 Color Management 
+
+Color assignment is owned by our charting system, not by Matplotlib.
+Matplotlib receives explicit colors and never invents or cycles them.
+
+Within a single rendering, the same assignment always has the same color across all charts.
+Across different renderings, colors are not guaranteed to be stable.
+
+Color identity is guaranteed only up to 16 distinct assignments per rendering; beyond that, colors are reused deterministically with warning.
+
 ───────────────────────────────────────────────────────────────────────────────
 
-# 13. Summary Matrix
+# 14. Summary Matrix
 
 A compact reference:
 
