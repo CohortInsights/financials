@@ -182,11 +182,47 @@ function attachDurationListeners() {
     });
 }
 
-// --- Primary entry point, called when tab is activated ---
+
+function renderAssignmentsYearCheckboxes(years) {
+    const container = document.getElementById("assignmentsYearSelector");
+    if (!container) return;
+
+    container.innerHTML = "";
+    if (!Array.isArray(years) || years.length === 0) return;
+
+    const newest = Math.max(...years);
+
+    years.forEach(year => {
+        const label = document.createElement("label");
+        const cb = document.createElement("input");
+
+        cb.type = "checkbox";
+        cb.value = String(year);
+        cb.checked = (year === newest);
+
+        label.appendChild(cb);
+        label.append(` ${year}`);
+        container.appendChild(label);
+    });
+}
+
 function initAssignments() {
     console.log("📘 Initializing Assignments tab");
 
-    attachAssignmentYearListeners();
-    attachDurationListeners();
-    loadAssignments();
+    fetch("/api/transaction_years")
+        .then(res => res.json())
+        .then(data => {
+            const years = data.years || [];
+
+            renderAssignmentsYearCheckboxes(years);
+
+            // IMPORTANT: listeners must come AFTER rendering
+            attachAssignmentYearListeners();
+            attachDurationListeners();
+
+            loadAssignments();
+        })
+        .catch(err => {
+            console.error("❌ Failed to load assignment years:", err);
+        });
 }

@@ -207,9 +207,46 @@ function attachYearCheckboxListeners() {
   checkboxes.forEach(cb => cb.addEventListener('change', loadTransactions));
 }
 
-// --- Module entry point called from code.js ---
+function renderYearCheckboxes(containerId, years) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+
+  container.innerHTML = "";
+  if (!Array.isArray(years) || years.length === 0) return;
+
+  const newest = Math.max(...years);
+
+  years.forEach(year => {
+    const label = document.createElement("label");
+    const cb = document.createElement("input");
+
+    cb.type = "checkbox";
+    cb.value = String(year);
+    cb.checked = (year === newest);
+
+    label.appendChild(cb);
+    label.append(` ${year}`);
+    container.appendChild(label);
+  });
+}
+
 function initTransactions() {
   console.log("🚀 Initializing transaction dashboard");
-  attachYearCheckboxListeners();
-  loadTransactions();
+
+  fetch("/api/transaction_years")
+    .then(res => res.json())
+    .then(data => {
+      const years = data.years || [];
+
+      renderYearCheckboxes("yearSelector", years);
+
+      // IMPORTANT: listeners must be attached AFTER rendering
+      attachYearCheckboxListeners();
+
+      // Initial load
+      loadTransactions();
+    })
+    .catch(err => {
+      console.error("❌ Failed to load transaction years:", err);
+    });
 }

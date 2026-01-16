@@ -99,6 +99,21 @@ def compute_transactions(args):
     return df
 
 
+def compute_transaction_years() -> list[int]:
+    """
+    Return distinct transaction years, sorted descending.
+    """
+    transactions = db_module.db["transactions"]
+
+    cursor = transactions.aggregate([
+        {"$project": {"year": {"$year": "$date"}}},
+        {"$group": {"_id": "$year"}},
+        {"$sort": {"_id": -1}},
+    ])
+
+    return [doc["_id"] for doc in cursor if doc.get("_id") is not None]
+
+
 def compute_assignment_meta(df):
     """
     Compute derived meta information from a filtered assignment table.
@@ -417,3 +432,9 @@ def api_filtered_assignments():
     )
 
     return respond_with_format(df, "filtered_assignments.csv")
+
+@app.route("/api/transaction_years")
+def api_transaction_years():
+    years = compute_transaction_years()
+    return jsonify({"years": years})
+
