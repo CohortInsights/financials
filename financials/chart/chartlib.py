@@ -202,6 +202,62 @@ def _normalize_args(args: dict) -> tuple[dict, list[int] | None]:
     return args, years
 
 
+def _order_bar_assignments(
+        df: pd.DataFrame,
+        *,
+        order_mode: str,
+) -> pd.DataFrame:
+    """
+    Order bar assignments according to assignment_order policy.
+
+    Semantics:
+    - table_order: aggregated absolute amount descending
+    - value_order: aggregated absolute amount descending
+      (currently identical for simple bars)
+    """
+
+    df = df.copy()
+    df["abs_amount"] = df["amount"].abs()
+
+    if order_mode in ("table_order", "value_order"):
+        return df.sort_values(
+            by="abs_amount",
+            ascending=False,
+        )
+
+    raise ChartConfigError(f"Unknown assignment_order: {order_mode}")
+
+
+def compute_bar_simple(
+        *,
+        ax,
+        labels,
+        values,
+        color,
+        title,
+        chart_spec,
+) -> None:
+    """
+    Render a simple (non-stacked) bar chart.
+    Assumes reducers have already been applied.
+    """
+
+    orientation = chart_spec["parameters"].get("orientation", "vertical")
+    show_zero = chart_spec["parameters"].get("show_zero_line", True)
+
+    if orientation == "vertical":
+        ax.bar(labels, values, color=color)
+        if show_zero:
+            ax.axhline(0, linewidth=0.8, color="gray")
+    else:
+        ax.barh(labels, values, color=color)
+        if show_zero:
+            ax.axvline(0, linewidth=0.8, color="gray")
+        ax.invert_yaxis()  # ← ADD THIS
+
+    ax.set_title(title)
+
+
 def _load_chart_data(args, filters, years):
     """
     Load canonical chart data.
@@ -381,7 +437,7 @@ def _resolve_chart_context(chart_spec, args, meta, df):
     """
     interpretation = chart_spec["interpretation"]
     eligibility_cfg = chart_spec.get("eligibility", {})
-    layout_cfg = chart_spec["layout"]["multi_pie_behavior"]
+    layout_cfg = chart_spec.get("layout", {}).get("multi_pie_behavior", {})
 
     duration = args.get("duration", "year")
 
@@ -647,11 +703,8 @@ def compute_chart(
     Full server-side charting pipeline.
     Returns PNG image bytes.
     """
-    pprint(chart_type)
-    pprint(args)
-    pprint(filters)
 
-    if chart_type != "pie":
+    if chart_type not in ("pie", "bar"):
         raise ChartConfigError(f"Unsupported chart type: {chart_type}")
 
     # ------------------------------------------------------------
@@ -665,28 +718,30 @@ def compute_chart(
     df, meta = _load_chart_data(args, filters, years)
 
     # ------------------------------------------------------------
-    # 2. Row-level reductions
+    # 2. Declarative reducers
     # ------------------------------------------------------------
     chart_spec = load_chart_spec(chart_type)
     df, warnings = _apply_reducers(df, meta, chart_spec, chart_type=chart_type)
 
     # ------------------------------------------------------------
-    # 3. Load chart + plots specs
+    # 3. Load plots spec (colors only needed for pies)
     # ------------------------------------------------------------
     plots_path = CFG_DIR / "plots.json"
     with open(plots_path, "r") as f:
         plots_spec = json.load(f)
 
-    assignment_colors, color_warnings = _build_assignment_color_map(df, plots_spec)
-    warnings.extend(color_warnings)
+    assignment_colors = {}
+    if chart_type == "pie":
+        assignment_colors, color_warnings = _build_assignment_color_map(df, plots_spec)
+        warnings.extend(color_warnings)
 
     # ------------------------------------------------------------
     # 4. Resolve chart context
     # ------------------------------------------------------------
     ctx = _resolve_chart_context(chart_spec, args, meta, df)
-    pprint(ctx)
 
-    interpretation = chart_spec["interpretation"]
+    interpretation = chart_spec.get("interpretation", {})
+    ordering_cfg = chart_spec.get("ordering", {})
     other_cfg = chart_spec.get("other_slice", {})
     min_fraction = chart_spec["parameters"].get("min_fraction")
 
@@ -696,15 +751,13 @@ def compute_chart(
 
     keys = ctx["keys"]
     dimension = ctx["dimension"]
-    pprint(keys)
-    pprint(dimension)
 
     # ------------------------------------------------------------
-    # 4a. Context-wide min_fraction (multi-chart only)
+    # 4a. Context-wide min_fraction (pie only)
     # ------------------------------------------------------------
     global_keep_assignments = None
 
-    if min_fraction is not None and len(keys) > 1:
+    if chart_type == "pie" and min_fraction is not None and len(keys) > 1:
         global_keep_assignments = _compute_global_min_fraction_assignments(
             df,
             dimension=dimension,
@@ -735,7 +788,7 @@ def compute_chart(
         axes = [ax]
 
     # ------------------------------------------------------------
-    # 6. Render pies
+    # 6. Render charts
     # ------------------------------------------------------------
     for idx, key in enumerate(keys):
         ax = axes[idx]
@@ -748,59 +801,108 @@ def compute_chart(
         )
 
         values = grouped["amount"]
-        if interpretation.get("abs_for_negative_only", False) and (values < 0).any():
-            values = values.abs()
 
-        assignments = grouped["assignment"].tolist()
-        labels = [a.split(".")[-1] for a in assignments]
-        colors = [assignment_colors.get(a) for a in assignments]
+        # ------------------------
+        # PIE
+        # ------------------------
+        if chart_type == "pie":
+            if interpretation.get("abs_for_negative_only", False) and (values < 0).any():
+                values = values.abs()
 
-        if other_cfg.get("enabled") and min_fraction is not None:
-            kept_labels, kept_values, kept_colors = [], [], []
-            other_total = 0.0
+            assignments = grouped["assignment"].tolist()
+            labels = [a.split(".")[-1] for a in assignments]
+            colors = [assignment_colors.get(a) for a in assignments]
 
-            total = values.abs().sum() if values is not None else 0.0
+            if other_cfg.get("enabled") and min_fraction is not None:
+                kept_labels, kept_values, kept_colors = [], [], []
+                other_total = 0.0
 
-            for asn, lbl, val, col in zip(assignments, labels, values, colors):
-                if global_keep_assignments is not None:
-                    keep = asn in global_keep_assignments
-                else:
-                    keep = abs(val) / total >= min_fraction if total else True
+                total = values.abs().sum() if values is not None else 0.0
 
-                if keep:
-                    kept_labels.append(lbl)
-                    kept_values.append(val)
-                    kept_colors.append(col)
-                else:
-                    other_total += val
+                for asn, lbl, val, col in zip(assignments, labels, values, colors):
+                    if global_keep_assignments is not None:
+                        keep = asn in global_keep_assignments
+                    else:
+                        keep = abs(val) / total >= min_fraction if total else True
 
-            if other_total != 0:
-                kept_labels.append(other_cfg.get("label", "Other"))
-                kept_values.append(other_total)
-                kept_colors.append(assignment_colors.get("Other"))
+                    if keep:
+                        kept_labels.append(lbl)
+                        kept_values.append(val)
+                        kept_colors.append(col)
+                    else:
+                        other_total += val
 
-            labels = kept_labels
-            values = kept_values
-            colors = kept_colors
-        else:
+                if other_total != 0:
+                    kept_labels.append(other_cfg.get("label", "Other"))
+                    kept_values.append(other_total)
+                    kept_colors.append(assignment_colors.get("Other"))
+
+                labels = kept_labels
+                values = kept_values
+                colors = kept_colors
+            else:
+                values = values.tolist()
+
+            title = _render_chart_title(
+                template=ctx["title_template"],
+                base_ctx=ctx["title_ctx"],
+                values=values,
+                key=key,
+                multi_chart=len(keys) > 1,
+            )
+
+            compute_pie(
+                ax=ax,
+                labels=labels,
+                values=values,
+                colors=colors,
+                title=title,
+                chart_spec=chart_spec,
+            )
+
+        # ------------------------
+        # SIMPLE BAR
+        # ------------------------
+        elif chart_type == "bar":
+            assignment_order = ordering_cfg.get("assignment_order", "table_order")
+
+            grouped = _order_bar_assignments(
+                grouped,
+                order_mode=assignment_order,
+            )
+
+            values = grouped["amount"]
+
+            # sign_handling: negative_only → absolute
+            if (values < 0).all():
+                values = values.abs()
+
+            labels = [a.split(".")[-1] for a in grouped["assignment"]]
             values = values.tolist()
 
-        title = _render_chart_title(
-            template=ctx["title_template"],
-            base_ctx=ctx["title_ctx"],
-            values=values,
-            key=key,
-            multi_chart=len(keys) > 1,
-        )
+            title = _render_chart_title(
+                template=ctx["title_template"],
+                base_ctx=ctx["title_ctx"],
+                values=values,
+                key=key,
+                multi_chart=len(keys) > 1,
+            )
 
-        compute_pie(
-            ax=ax,
-            labels=labels,
-            values=values,
-            colors=colors,
-            title=title,
-            chart_spec=chart_spec,
-        )
+            # Color by year cluster
+            if len(keys) == 1:
+                color = "tab:blue"
+            else:
+                palette = plt.get_cmap("tab10")
+                color = palette(idx % 10)
+
+            compute_bar_simple(
+                ax=ax,
+                labels=labels,
+                values=values,
+                color=color,
+                title=title,
+                chart_spec=chart_spec,
+            )
 
     for j in range(len(keys), len(axes)):
         axes[j].axis("off")

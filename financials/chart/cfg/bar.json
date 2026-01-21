@@ -3,11 +3,11 @@
 
   "parameters": {
     "min_fraction": {
-      "value": 0.01,
+      "value": 0.005,
       "overridable": true
     },
     "orientation": {
-      "value": "vertical",
+      "value": "horizontal",
       "overridable": false
     },
     "show_zero_line": {
@@ -64,7 +64,7 @@
   },
 
   "ordering": {
-    "assignment_order": "table_order",
+    "assignment_order": "value_order",
     "stack_order": "table_order",
     "parent_bar_height": "major_only",
     "child_segment_height": "minor_only"

@@ -34,6 +34,7 @@
       "scope": "major",
       "threshold": "min_fraction",
       "behavior": "drop",
+      "behavior": "merge_other",
       "label": "Other"
     }
   ],
