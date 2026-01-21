@@ -21,6 +21,23 @@
     }
   },
 
+  "reducers": [
+    {
+      "type": "reduce_mixed_sign",
+      "behavior": "keep_dominant"
+    },
+    {
+      "type": "drop_minor_levels"
+    },
+    {
+      "type": "min_fraction",
+      "scope": "major",
+      "threshold": "min_fraction",
+      "behavior": "drop",
+      "label": "Other"
+    }
+  ],
+
   "pattern_policies": {
     "minor_levels_present": "ignore_minor_rows_and_warn",
     "multiple_periods_present": "chart_per_period",
@@ -43,7 +60,7 @@
   },
 
   "title": {
-  "template": "{asn} (L{level}) {duration_label} Total:${sum}"
+    "template": "{asn} (L{level}) {duration_label} Total:${sum}"
   },
 
   "labeling": {
@@ -59,9 +76,9 @@
   },
 
   "warnings": {
-  "mixed_sign_present": "* {amount} ({rows} rows) of {sign} values were ignored",
-  "minor_levels_present": "* {rows} rows from deeper assignment levels were ignored",
-  "max_charts_truncated": "* Only the first {kept} of {total} charts were shown"
+    "mixed_sign_present": "* {amount} ({rows} rows) of {sign} values were ignored",
+    "minor_levels_present": "* {rows} rows from deeper assignment levels were ignored",
+    "max_charts_truncated": "* Only the first {kept} of {total} charts were shown"
   },
 
   "other_slice": {

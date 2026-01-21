@@ -179,7 +179,7 @@ def compute_pie(*, ax, labels, values, colors, title, chart_spec) -> None:
         pctdistance=pct_distance,
         startangle=90,
     )
-    ax.set_title(title)      # ← THIS must be here
+    ax.set_title(title)  # ← THIS must be here
     ax.axis("equal")
 
 
@@ -257,11 +257,120 @@ def _apply_row_reducers(df, meta, chart_type):
             raise ChartDataError("No data remaining after mixed-sign reduction")
 
     if chart_type == "pie":
-        df, warning = _reduce_minor_levels(df)   # data-driven depth drop
+        df, warning = _reduce_minor_levels(df)  # data-driven depth drop
         if warning:
             warnings.append(warning)
         if df.empty:
             raise ChartDataError("No data remaining after minor-level reduction")
+
+    return df, warnings
+
+
+def _apply_min_fraction_reducer(*, df, reducer, chart_spec):
+    """
+    Apply min_fraction reducer using existing pie logic.
+    """
+    warnings = []
+
+    threshold_param = reducer.get("threshold")
+    if not threshold_param:
+        return df, warnings
+
+    threshold = chart_spec["parameters"].get(threshold_param)
+    if threshold is None:
+        return df, warnings
+
+    behavior = reducer.get("behavior", "drop")
+    label = reducer.get("label", "Other")
+
+    # Aggregate by assignment (current pie behavior)
+    grouped = (
+        df
+        .groupby("assignment", as_index=False)["amount"]
+        .sum()
+    )
+
+    values = grouped["amount"].abs()
+    total = values.sum()
+
+    if total == 0:
+        return df, warnings
+
+    keep_assignments = set(
+        grouped.loc[(values / total) >= threshold, "assignment"]
+    )
+
+    if behavior == "drop":
+        dropped = df[~df["assignment"].isin(keep_assignments)]
+        if not dropped.empty:
+            warnings.append({
+                "code": "min_fraction_dropped",
+                "rows": len(dropped),
+            })
+        df = df[df["assignment"].isin(keep_assignments)]
+
+    elif behavior == "merge_other":
+        df_keep = df[df["assignment"].isin(keep_assignments)]
+        df_other = df[~df["assignment"].isin(keep_assignments)]
+
+        if not df_other.empty:
+            other_row = (
+                df_other
+                .groupby(
+                    [c for c in df.columns if c != "assignment"],
+                    as_index=False
+                )["amount"]
+                .sum()
+            )
+            other_row["assignment"] = label
+            df = pd.concat([df_keep, other_row], ignore_index=True)
+        else:
+            df = df_keep
+
+    else:
+        raise ChartConfigError(f"Unknown min_fraction behavior: {behavior}")
+
+    return df, warnings
+
+
+def _apply_reducers(df, meta, chart_spec, *, chart_type: str):
+    """
+    Apply declarative reducers defined in chart_spec["reducers"].
+    Returns (df, warnings).
+    """
+    warnings = []
+
+    reducers = chart_spec.get("reducers", [])
+    if not reducers:
+        return df, warnings
+
+    for reducer in reducers:
+        rtype = reducer["type"]
+
+        if rtype == "reduce_mixed_sign":
+            if meta.get("sign") == "mixed":
+                df, warning = reduce_mixed_sign(df)
+                if warning:
+                    warnings.append(warning)
+
+        elif rtype == "drop_minor_levels":
+            df, warning = _reduce_minor_levels(df)
+            if warning:
+                warnings.append(warning)
+
+        elif rtype == "min_fraction":
+            df, reducer_warnings = _apply_min_fraction_reducer(
+                df=df,
+                reducer=reducer,
+                chart_spec=chart_spec,
+            )
+            warnings.extend(reducer_warnings)
+
+        else:
+            raise ChartConfigError(f"Unknown reducer type: {rtype}")
+
+        if df.empty:
+            raise ChartDataError("No data remaining after reducers")
 
     return df, warnings
 
@@ -315,6 +424,7 @@ def _resolve_chart_context(chart_spec, args, meta, df):
         "duration": duration,
     }
 
+
 def _reduce_minor_levels(df):
     """
     Drop rows deeper than the shallowest assignment level present.
@@ -338,13 +448,14 @@ def _reduce_minor_levels(df):
 
     return df[mask].copy(), warning
 
+
 # ------------------------------------------------------------------
 # Color assignment helper
 # ------------------------------------------------------------------
 
 def _build_assignment_color_map(
-    df: pd.DataFrame,
-    plots_spec: dict,
+        df: pd.DataFrame,
+        plots_spec: dict,
 ) -> tuple[dict[str, str], list[dict]]:
     """
     Build a deterministic assignment -> color map for a single rendering.
@@ -424,6 +535,7 @@ def _build_assignment_color_map(
 
     return assignment_to_color, warnings
 
+
 # ------------------------------------------------------------------
 # Grid layout helper
 # ------------------------------------------------------------------
@@ -454,11 +566,11 @@ def _compute_grid_layout(n: int) -> tuple[int, int]:
 # ------------------------------------------------------------------
 
 def _compute_global_min_fraction_assignments(
-    df: pd.DataFrame,
-    *,
-    dimension: str,
-    min_fraction: float,
-    use_absolute: bool,
+        df: pd.DataFrame,
+        *,
+        dimension: str,
+        min_fraction: float,
+        use_absolute: bool,
 ) -> set[str]:
     """
     Compute a global assignment inclusion set using average magnitude
@@ -493,17 +605,18 @@ def _compute_global_min_fraction_assignments(
 
     keep = avg_by_assignment[
         (avg_by_assignment["amount"] / total) >= min_fraction
-    ]["assignment"]
+        ]["assignment"]
 
     return set(keep.tolist())
 
+
 def _render_chart_title(
-    *,
-    template: str,
-    base_ctx: dict,
-    values: list,
-    key=None,
-    multi_chart: bool = False,
+        *,
+        template: str,
+        base_ctx: dict,
+        values: list,
+        key=None,
+        multi_chart: bool = False,
 ) -> str:
     """
     Render a chart title with a per-chart displayed sum.
@@ -521,6 +634,9 @@ def _render_chart_title(
     return base_title or (str(key) if key is not None else "")
 
 
+from pprint import pprint
+
+
 def compute_chart(
         *,
         chart_type: str,
@@ -531,6 +647,9 @@ def compute_chart(
     Full server-side charting pipeline.
     Returns PNG image bytes.
     """
+    pprint(chart_type)
+    pprint(args)
+    pprint(filters)
 
     if chart_type != "pie":
         raise ChartConfigError(f"Unsupported chart type: {chart_type}")
@@ -548,13 +667,12 @@ def compute_chart(
     # ------------------------------------------------------------
     # 2. Row-level reductions
     # ------------------------------------------------------------
-    df, warnings = _apply_row_reducers(df, meta, chart_type)
+    chart_spec = load_chart_spec(chart_type)
+    df, warnings = _apply_reducers(df, meta, chart_spec, chart_type=chart_type)
 
     # ------------------------------------------------------------
     # 3. Load chart + plots specs
     # ------------------------------------------------------------
-    chart_spec = load_chart_spec(chart_type)
-
     plots_path = CFG_DIR / "plots.json"
     with open(plots_path, "r") as f:
         plots_spec = json.load(f)
@@ -566,6 +684,7 @@ def compute_chart(
     # 4. Resolve chart context
     # ------------------------------------------------------------
     ctx = _resolve_chart_context(chart_spec, args, meta, df)
+    pprint(ctx)
 
     interpretation = chart_spec["interpretation"]
     other_cfg = chart_spec.get("other_slice", {})
@@ -577,6 +696,8 @@ def compute_chart(
 
     keys = ctx["keys"]
     dimension = ctx["dimension"]
+    pprint(keys)
+    pprint(dimension)
 
     # ------------------------------------------------------------
     # 4a. Context-wide min_fraction (multi-chart only)

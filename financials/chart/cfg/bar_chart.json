@@ -1,0 +1,76 @@
+{
+  "chart_type": "bar",
+
+  "parameters": {
+    "min_fraction": {
+      "value": 0.01,
+      "overridable": true
+    },
+    "orientation": {
+      "value": "vertical",
+      "overridable": false
+    },
+    "show_zero_line": {
+      "value": true,
+      "overridable": false
+    }
+  },
+
+  "reducers": [
+    {
+      "type": "reduce_mixed_sign",
+      "behavior": "keep_dominant"
+    },
+    {
+      "type": "drop_minor_levels"
+    },
+    {
+      "type": "min_fraction",
+      "scope": "major",
+      "threshold": "min_fraction",
+      "behavior": "drop"
+    }
+  ],
+
+  "interpretation": {
+    "uses_major_level": true,
+
+    "variant_selection": {
+      "simple_if": {
+        "has_minor_levels": false
+      },
+      "stacked_if": {
+        "has_minor_levels": true
+      }
+    },
+
+    "sign_handling": {
+      "negative_only": "absolute",
+      "mixed_sign": "split_positive_negative"
+    }
+  },
+
+  "axes": {
+    "bar_axis": {
+      "default": "assignment",
+      "single_assignment_multiple_periods": "period"
+    },
+    "amount_axis": "value"
+  },
+
+  "time_layout": {
+    "multiple_periods": "row_per_period",
+    "multiple_years": "cluster_by_year"
+  },
+
+  "ordering": {
+    "assignment_order": "table_order",
+    "stack_order": "table_order",
+    "parent_bar_height": "major_only",
+    "child_segment_height": "minor_only"
+  },
+
+  "labeling": {
+    "strategy": "shortest_unique_trailing_fragment"
+  }
+}
