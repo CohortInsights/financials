@@ -4,6 +4,8 @@ from pathlib import Path
 import pandas as pd
 import io
 
+import matplotlib
+matplotlib.use("Agg")   # MUST come before pyplot import
 import matplotlib.pyplot as plt
 from financials.routes.api_transactions import compute_assignments
 
