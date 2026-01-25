@@ -669,25 +669,25 @@ def _render_chart_title(
         base_ctx: dict,
         values: list,
         key=None,
+        period=None,
         multi_chart: bool = False,
 ) -> str:
-    """
-    Render a chart title with a per-chart displayed sum.
-    """
     display_sum = sum(values) if values else 0.0
 
     title_ctx = dict(base_ctx)
     title_ctx["sum"] = f"{display_sum:,.2f}"
+    if period:
+        title_ctx["period"] = period
 
     base_title = render_title(template, title_ctx)
 
     if multi_chart and key is not None and base_title:
         return f"{base_title} — {key}"
+    # Only append key if template does not already include {period}
+    if multi_chart and key is not None and base_title and "{period}" not in template:
+        return f"{base_title} — {key}"
 
     return base_title or (str(key) if key is not None else "")
-
-
-from pprint import pprint
 
 
 def compute_chart(
@@ -845,6 +845,7 @@ def compute_chart(
                 base_ctx=ctx["title_ctx"],
                 values=values,
                 key=key,
+                period=str(key),
                 multi_chart=len(keys) > 1,
             )
 
@@ -882,6 +883,7 @@ def compute_chart(
                 base_ctx=ctx["title_ctx"],
                 values=values,
                 key=key,
+                period=str(key),
                 multi_chart=len(keys) > 1,
             )
 

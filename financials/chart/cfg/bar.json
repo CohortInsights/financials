@@ -70,6 +70,10 @@
     "child_segment_height": "minor_only"
   },
 
+  "title": {
+    "template": "asn={asn} (L{level}) Total:${sum}"
+  },
+
   "labeling": {
     "strategy": "shortest_unique_trailing_fragment"
   }

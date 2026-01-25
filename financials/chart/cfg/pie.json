@@ -61,7 +61,7 @@
   },
 
   "title": {
-    "template": "{asn} (L{level}) {duration_label} Total:${sum}"
+    "template": "asn={asn} (L{level}) {period} Total:${sum}"
   },
 
   "labeling": {
