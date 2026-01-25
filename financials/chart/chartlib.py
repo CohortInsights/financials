@@ -262,7 +262,7 @@ def compute_bar_simple(
 
 def _load_chart_data(args, filters, years):
     """
-    Load canonical chart data.
+    Load canonical chart data and compute meta
     Expands multi-year requests into per-year fetches.
     """
     args = args.copy()
@@ -438,7 +438,6 @@ def _resolve_chart_context(chart_spec, args, meta, df):
     Resolve duration, split dimension, titles, layout, and chart keys.
     """
     interpretation = chart_spec["interpretation"]
-    eligibility_cfg = chart_spec.get("eligibility", {})
     layout_cfg = chart_spec.get("layout", {}).get("multi_pie_behavior", {})
 
     duration = args.get("duration", "year")
@@ -468,10 +467,6 @@ def _resolve_chart_context(chart_spec, args, meta, df):
         )
 
     keys = list(dict.fromkeys(df[dimension].tolist()))
-
-    max_charts = eligibility_cfg.get("max_periods")
-    if max_charts is not None:
-        keys = keys[:max_charts]
 
     return {
         "dimension": dimension,
@@ -715,22 +710,22 @@ def compute_chart(
     args, years = _normalize_args(args)
 
     # ------------------------------------------------------------
-    # 1. Load data
+    # 1. Load chart data, compute meta, and load chart specification for chart type
     # ------------------------------------------------------------
     df, meta = _load_chart_data(args, filters, years)
-
-    # ------------------------------------------------------------
-    # 2. Declarative reducers
-    # ------------------------------------------------------------
     chart_spec = load_chart_spec(chart_type)
-    df, warnings = _apply_reducers(df, meta, chart_spec, chart_type=chart_type)
 
     # ------------------------------------------------------------
-    # 3. Load plots spec (colors only needed for pies)
+    # 2. Load settings global to all plots
     # ------------------------------------------------------------
     plots_path = CFG_DIR / "plots.json"
     with open(plots_path, "r") as f:
         plots_spec = json.load(f)
+
+    # ------------------------------------------------------------
+    # 3. Declarative reducers
+    # ------------------------------------------------------------
+    df, warnings = _apply_reducers(df, meta, chart_spec, chart_type=chart_type)
 
     assignment_colors = {}
     if chart_type == "pie":

@@ -17,6 +17,7 @@ pandas = "^2.3.2"
 pymongo = "^4.15.1"
 python-dotenv = "^1.1.1"
 matplotlib = "^3.10.8"
+Addpandas-stubs = "~=2.3.3"
 
 
 [tool.poetry.group.dev.dependencies]
