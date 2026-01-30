@@ -1,5 +1,3 @@
-from typing import Dict, Any, List
-import json
 from pathlib import Path
 import pandas as pd
 import io
@@ -7,40 +5,17 @@ import io
 import matplotlib
 matplotlib.use("Agg")   # MUST come before pyplot import
 import matplotlib.pyplot as plt
-from financials.routes.api_transactions import compute_assignments
+from financials.chart.chart_render import compute_chart_v2
 
-# ------------------------------------------------------------------
-# Chart spec loading
-# ------------------------------------------------------------------
-
-CFG_DIR = Path(__file__).resolve().parent / "cfg"
-
-
-def render_warnings(fig, warnings, chart_spec, *, fontsize=8):
-    if not warnings:
-        return
-
-    templates = chart_spec.get("warnings", {})
-    lines = []
-
-    for w in warnings:
-        template = templates.get(w["code"])
-        if template:
-            lines.append(template.format(**w))
-
-    if not lines:
-        return
-
-    fig.text(
-        0.5,
-        0.01,
-        "\n".join(lines),
-        ha="center",
-        va="bottom",
-        fontsize=fontsize,
-        color="gray",
-    )
-
+from financials.chart.chart_common import (
+    _normalize_args,
+    _load_chart_data,
+    load_chart_spec,
+    render_warnings,
+    ChartDataError,
+    ChartConfigError,
+    CFG_DIR,
+)
 
 def duration_to_label(duration: str) -> str:
     """
@@ -61,50 +36,6 @@ def render_title(template: str, ctx: dict) -> str:
     return " ".join(title.split())
 
 
-def load_chart_spec(chart_type: str) -> dict:
-    """
-    Load and fully resolve a chart specification by merging:
-      - plots.json (global defaults)
-      - <chart_type>.json (chart-specific rules)
-
-    Returns a resolved chart_spec suitable for rendering.
-    """
-
-    plots_path = CFG_DIR / "plots.json"
-    if not plots_path.exists():
-        raise FileNotFoundError("plots.json not found")
-
-    with open(plots_path, "r") as f:
-        plots_spec = json.load(f)
-
-    chart_path = CFG_DIR / f"{chart_type}.json"
-    if not chart_path.exists():
-        raise FileNotFoundError(f"Unknown chart type: {chart_type}")
-
-    with open(chart_path, "r") as f:
-        chart_spec = json.load(f)
-
-    resolved_params = {}
-    for name, param_spec in chart_spec.get("parameters", {}).items():
-        if "value" in param_spec:
-            resolved_params[name] = param_spec["value"]
-        elif "pctdistance" in param_spec:
-            resolved_params[name] = param_spec["value"]
-        else:
-            source = param_spec.get("source")
-            if not source or not source.startswith("plots.defaults."):
-                raise ValueError(f"Invalid parameter source for '{name}'")
-
-            key = source.replace("plots.defaults.", "")
-            if plots_spec["defaults"][key]:
-                resolved_params[name] = plots_spec["defaults"][key]
-
-    chart_spec["parameters"] = resolved_params
-    chart_spec["rendering"] = plots_spec["defaults"].get("rendering", {}).copy()
-
-    return chart_spec
-
-
 # ------------------------------------------------------------------
 # Exceptions
 # ------------------------------------------------------------------
@@ -113,14 +44,6 @@ class ChartNotAllowedError(Exception):
     def __init__(self, eligibility_result: dict):
         self.eligibility_result = eligibility_result
         super().__init__("Chart not allowed")
-
-
-class ChartDataError(Exception):
-    pass
-
-
-class ChartConfigError(Exception):
-    pass
 
 
 # ------------------------------------------------------------------
@@ -185,23 +108,6 @@ def compute_pie(*, ax, labels, values, colors, title, chart_spec) -> None:
     ax.axis("equal")
 
 
-def _normalize_args(args: dict) -> tuple[dict, list[int] | None]:
-    """
-    Normalize query arguments.
-    - Extract multi-year intent from year=2023,2024
-    """
-    args = args.copy()
-    years = None
-
-    year_arg = args.get("year")
-    if isinstance(year_arg, str) and "," in year_arg:
-        try:
-            years = [int(y.strip()) for y in year_arg.split(",")]
-            del args["year"]
-        except ValueError:
-            raise ChartConfigError(f"Invalid year filter: {year_arg}")
-
-    return args, years
 
 
 def _order_bar_assignments(
@@ -258,50 +164,6 @@ def compute_bar_simple(
         ax.invert_yaxis()  # ← ADD THIS
 
     ax.set_title(title)
-
-
-def _load_chart_data(args, filters, years):
-    """
-    Load canonical chart data and compute meta
-    Expands multi-year requests into per-year fetches.
-    """
-    args = args.copy()
-    args["expand"] = "1"
-
-    if years:
-        dfs = []
-        meta = None
-
-        for y in years:
-            args_y = args.copy()
-            args_y["year"] = str(y)
-
-            df_y, meta_y = compute_assignments(
-                args_y,
-                filters=filters,
-                zero_fill=False,
-            )
-
-            if not df_y.empty:
-                dfs.append(df_y)
-                meta = meta_y
-
-        if not dfs:
-            raise ChartDataError("No data available for chart")
-
-        df = pd.concat(dfs, ignore_index=True)
-        return df, meta
-
-    df, meta = compute_assignments(
-        args,
-        filters=filters,
-        zero_fill=False,
-    )
-
-    if df.empty:
-        raise ChartDataError("No data available for chart")
-
-    return df, meta
 
 
 def _apply_row_reducers(df, meta, chart_type):
@@ -704,6 +566,13 @@ def compute_chart(
     if chart_type not in ("pie", "bar"):
         raise ChartConfigError(f"Unsupported chart type: {chart_type}")
 
+    if chart_type == "bar":
+        return compute_chart_v2(
+            chart_type=chart_type,
+            args=args,
+            filters=filters,
+        )
+
     # ------------------------------------------------------------
     # 0. Normalize args
     # ------------------------------------------------------------
@@ -716,24 +585,17 @@ def compute_chart(
     chart_spec = load_chart_spec(chart_type)
 
     # ------------------------------------------------------------
-    # 2. Load settings global to all plots
-    # ------------------------------------------------------------
-    plots_path = CFG_DIR / "plots.json"
-    with open(plots_path, "r") as f:
-        plots_spec = json.load(f)
-
-    # ------------------------------------------------------------
-    # 3. Declarative reducers
+    # 2. Declarative reducers
     # ------------------------------------------------------------
     df, warnings = _apply_reducers(df, meta, chart_spec, chart_type=chart_type)
 
     assignment_colors = {}
     if chart_type == "pie":
-        assignment_colors, color_warnings = _build_assignment_color_map(df, plots_spec)
+        assignment_colors, color_warnings = _build_assignment_color_map(df, chart_spec)
         warnings.extend(color_warnings)
 
     # ------------------------------------------------------------
-    # 4. Resolve chart context
+    # 3. Resolve chart context
     # ------------------------------------------------------------
     ctx = _resolve_chart_context(chart_spec, args, meta, df)
 
@@ -750,7 +612,7 @@ def compute_chart(
     dimension = ctx["dimension"]
 
     # ------------------------------------------------------------
-    # 4a. Context-wide min_fraction (pie only)
+    # 4. Context-wide min_fraction (pie only)
     # ------------------------------------------------------------
     global_keep_assignments = None
 

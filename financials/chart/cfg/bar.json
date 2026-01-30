@@ -2,79 +2,62 @@
   "chart_type": "bar",
 
   "parameters": {
-    "min_fraction": {
-      "value": 0.005,
-      "overridable": true
-    },
     "orientation": {
       "value": "horizontal",
       "overridable": false
     },
-    "show_zero_line": {
-      "value": true,
-      "overridable": false
+    "min_fraction": {
+      "value": 0.01,
+      "overridable": true
     }
   },
 
-  "reducers": [
-    {
-      "type": "reduce_mixed_sign",
-      "behavior": "keep_dominant"
-    },
-    {
-      "type": "drop_minor_levels"
-    },
-    {
-      "type": "min_fraction",
-      "scope": "major",
-      "threshold": "min_fraction",
-      "behavior": "drop"
-    }
-  ],
-
-  "interpretation": {
-    "uses_major_level": true,
-
-    "variant_selection": {
-      "simple_if": {
-        "has_minor_levels": false
-      },
-      "stacked_if": {
-        "has_minor_levels": true
-      }
-    },
-
-    "sign_handling": {
-      "negative_only": "absolute",
-      "mixed_sign": "split_positive_negative"
+  "data_contract": {
+    "ordering": "authoritative",
+    "hierarchy": {
+      "assignment_field": "assignment",
+      "delimiter": ".",
+      "depth_equals_level": true
     }
   },
 
-  "axes": {
-    "bar_axis": {
-      "default": "assignment",
-      "single_assignment_multiple_periods": "period"
+  "hierarchy_normalization": {
+    "max_levels": 2,
+    "drop_single_assignment_levels": true,
+    "select": "deepest_adjacent"
+  },
+
+  "values": {
+    "sign_mode": {
+      "single_sign": "absolute",
+      "mixed_sign": "signed"
     },
-    "amount_axis": "value"
+    "zero_line": {
+      "when": "mixed_sign"
+    }
   },
 
-  "time_layout": {
-    "multiple_periods": "row_per_period",
-    "multiple_years": "cluster_by_year"
+  "color": {
+    "single_level": {
+      "single_year": "period",
+      "multi_year": "year"
+    },
+    "stacked": {
+      "parent": "neutral",
+      "child": "assignment"
+    }
   },
 
-  "ordering": {
-    "assignment_order": "value_order",
-    "stack_order": "table_order",
-    "parent_bar_height": "major_only",
-    "child_segment_height": "minor_only"
+  "labels": {
+    "format": "{asn*} {period}",
+    "omit_period_if_constant": true,
+    "assignment_suffix": {
+      "remove_common_prefix": true,
+      "scope": "visual_level"
+    }
   },
 
-  "title": {
-    "template": "asn={asn} (L{level}) Total:${sum}"
-  },
-
-  "labeling": {
-    "strategy": "shortest_unique_trailing_fragment"
+  "warnings": {
+    "min_fraction_dropped": "n items below value {threshold} not shown"
   }
 }
