@@ -12,15 +12,19 @@ client-side and server-side logic.
 
 # 1. Charting Philosophy
 
-The filtered Assignments table is the sole authoritative source for chart-data computation.
-
-1. User filtering controls the table data. Fitering can occur by assignment and level  
-2. Tabular Assignment (or "source data") is transposed into tabular chart data specific  
-for each chart type. All post assignment computation, ordering, and
+1. The filtered Assignments table is the sole authoritative source for computing chart-data. All
+computation related to the assignments and not specific to
+chart types occurs in this top level layer
+2. The assignment table can be filtered by user controls. Current controls are assignment ("contains" filter) and level  
+3. Chart data specific to each chart type is computed from the filtered assignments. All post assignment computation, ordering, and
 chart content including color assignment are completed in this layer.
-3. The maplotlib engine is used to render charts from the chart data. The
-rendering layer should make no decisions or computations. Its only
-function is to render.
+4. The resulting chart data is the sole authoritative source for chart rendering
+5. The maplotlib engine is used to render charts from the chart data. The
+rendering layer makes *no* decisions or computations. Its only
+function is to render. Matplotlib is on the server side and can later 
+be augmented by client side rendering such as PlotLy. In either case,
+the renderers make no decisions and relies solely on the chart data for 
+content, layout, color assignments, labels, titles, etc.
 
 # 2. Source Data Model and Terminology
 

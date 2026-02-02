@@ -30,28 +30,19 @@
 ### Source Meta Data
 
 
-| major level | 3            |
-| --- |--------------|
+| major level | 3           |
+| --- |-------------|
 | minor_level | &lt;none&gt; |
-| major_asignment_count | 8            |
-| sort_year_count | 2            |
-| sort_period_count | 1            |
-| sign | negative     |
-| Sum Value 2025 | 177314.13    |
-| Sum Value 2024 | 45231.17     |
-| Global Max Value | \$12,249.57  |
-| Min Frac | 0.05         |
-| Global Threshold | \$612.48     |
+| major_asignment_count | 8           |
+| sort_year_count | 2           |
+| sort_period_count | 1           |
+| sign | negative    |
+| Min Frac | 0.05        |
 | Common Prefix | Expense.Food |
 
 ## Pie Chart Representation
 
 URL: _api/charts/data?chart=pie&asn=Food&level=2&year=2025_
-
-| Chart Index | Chart Title |
-| --- | --- |
-| 1   | asn=Food L3 2024 |
-| 2   | asn=Food L3 2025 |
 
 **Chart Index:** In multi period pie charts, charts are indexed by Period
 
@@ -61,7 +52,14 @@ URL: _api/charts/data?chart=pie&asn=Food&level=2&year=2025_
 
 **Merging**: All value within the same period below global threshold are merged into "Other &lt;Period&gt;"
 
-## PIe Chart Data
+### Pie Chart Data
+
+| Chart Index | Chart Title                 | Sum | Absolute Sum | Max | Threshold
+| --- |-----------------------------| --- | --- | --- | --- |
+| 1   | asn=Food L3 2024 Sum $25878 | -25878 | 25878 | 10820 | 541
+| 2   | asn=Food L3 2025 Sum $28543 | -28543 | 28543 | 12250 | 612
+
+## Pie Chart Element Data
 
 | **Chart Index** | **Period** | **Slice Label** | **Slice Color** | **Slice Value** | **Slice Percent** |
 | --- | --- |-------| --- | --- | --- |
@@ -80,10 +78,6 @@ URL: _api/charts/data?chart=pie&asn=Food&level=2&year=2025_
 
 URL: _api/charts/render?chart=bar&asn=Food&level=2&year=2025_
 
-| Chart Index | Chart Title |
-| --- | --- |
-| 1   | asn=Food L23 |
-
 **Chart Index**: All bars are on the same chart.
 
 **Bar Color**: By period (2024,2025)
@@ -95,6 +89,12 @@ URL: _api/charts/render?chart=bar&asn=Food&level=2&year=2025_
 **X-Axis Labels**: None
 
 ## Bar Chart Data
+
+| Chart Index | Chart Title | Sum | Absolute Sum | Max | Threshold
+| --- |-------------| --- | --- | --- | --- |
+| 1 | asn=Food L3 | -54422 | 54442 | 12250 | 612
+
+## Bar Chart Element Data
 
 | **Chart Index** | **Period** | **Bar Label** | **Bar Color** | **Bar Value** |
 | --- | --- | --- | --- | --- |
@@ -115,10 +115,6 @@ URL: _api/charts/render?chart=bar&asn=Food&level=2&year=2025_
 
 URL: _api/charts/render?chart=bar&asn=Food&level=2&year=2025_
 
-| Chart Index | Chart Title |
-| --- | --- |
-| 1   | asn=Food L3 |
-
 **Chart Index**: All bars are on the same chart.
 
 **Area Labels**: Assignment only (**no** period)
@@ -133,15 +129,21 @@ URL: _api/charts/render?chart=bar&asn=Food&level=2&year=2025_
 
 ## Stacked Area Chart Data
 
-| **Chart Index** | **X-Axis** | **Area Label** | **Area Color** | **Area Value** |
-| --- | --- | --- | --- | --- |
-| 1   | 2024 | Restaurant | 1   | \$10,820.22 |
-| 1   | 2024 | Groceries | 2   | \$10,813.72 |
-| 1   | 2024 | Fast | 3   | \$2,154.41 |
-| 1   | 2024 | Snack | 4   | \$1,576.57 |
-| 1   | 2024 | Other | 5   | \$513.48 |
-| 1   | 2025 | Restaurant | 1   | \$12,249.57 |
-| 1   | 2025 | Groceries | 2   | \$11,445.96 |
-| 1   | 2025 | Fast | 3   | \$2,050.98 |
-| 1   | 2025 | Snack | 4   | \$1,680.74 |
-| 1   | 2025 | Other | 5   | \$1,116.18 |
+| Chart Index | Chart Title | Sum | Absolute Sum | Max | Threshold
+| --- |-------------| --- | --- | --- | --- |
+| 1 | asn=Food L3 | -54422 | 54442 | 12250 | 612
+
+## Stacked Area Chart Element Data
+
+| **Chart Index** | **X-Axis Label** | **Area Label** | **Area Color** | **Area Value** |
+| --- |------------------| --- | --- | --- |
+| 1   | 2024             | Restaurant | 1   | \$10,820.22 |
+| 1   | 2024             | Groceries | 2   | \$10,813.72 |
+| 1   | 2024             | Fast | 3   | \$2,154.41 |
+| 1   | 2024             | Snack | 4   | \$1,576.57 |
+| 1   | 2024             | Other | 5   | \$513.48 |
+| 1   | 2025             | Restaurant | 1   | \$12,249.57 |
+| 1   | 2025             | Groceries | 2   | \$11,445.96 |
+| 1   | 2025             | Fast | 3   | \$2,050.98 |
+| 1   | 2025             | Snack | 4   | \$1,680.74 |
+| 1   | 2025             | Other | 5   | \$1,116.18 |

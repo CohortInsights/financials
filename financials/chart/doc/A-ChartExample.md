@@ -41,10 +41,7 @@ Source Data (Filtered Assignments)
 | sort_year_count | 1   |
 | sort_period_count | 1   |
 | sign | negative |
-| Sum Value | 177314.13 |
-| Max Value | 32764.84 |
 | Min Frac | 0.05 |
-| Threshold | 1638.242 |
 | Common prefix | Expense. |
 
 **Chart Row Sequence:** Input order of chart data is authoritative. Renderer must preserve the sequence of chart elements (pie slices, bars, areas, etc.).
@@ -59,8 +56,6 @@ Source Data (Filtered Assignments)
 
 URL: _api/charts/data?chart=pie&asn=Expense&level=2&year=2025_
 
-### Pie Chart Data (authoritative)
-
 **Chart Cardinality**: For this single period case, there is a single chart (index)
 
 **Slice Percent**: Rendering should use Slice Percent column data and not re-compute it. Percent is computed from the sum of all values with the same chart index.
@@ -69,10 +64,12 @@ URL: _api/charts/data?chart=pie&asn=Expense&level=2&year=2025_
 
 **Color Palette**: 16 color palette is provided to the renderer. Color is derived from color index and palette.
 
-| Chart Index | Chart Title |
-| --- | --- |
-| 1   | asn=Expense L2 2025 |
+### Pie Chart Data
+| Chart Index | Chart Title | Sum | Absolute Sum | Max | Threshold
+| --- |-------------| --- | --- | --- | --- |
+| 1   | asn=Expense L2 2025 Sum $177314 | -177314.13 | 177314.13 | 32764.84 | 1638.42
 
+### Pie Chart Element Data
 | **Chart Index** | **Period** | **Slice Label** | **Slice Color** | **Slice Value** | **Slice Percent** | **Comment** |
 | --- | --- | --- | --- | --- | --- | --- |
 | 1   | 2025 | Tax | 1   | 32764.84 | 18.48% |     |
@@ -99,17 +96,19 @@ URL: _api/charts/data?chart=pie&asn=Expense&level=2&year=2025_
 
 URL: _api/charts/render?chart=bar&asn=Expense&level=2&year=2025_
 
-### Bar Chart Data (authoritative)  
-
 <br/>**Chart Cardinality**: Bar chart always has a single chart index
 
 **Color**: 4 color palette is provided to the renderer. Color is derived from color index and palette. For this case, there is only a single bar color.
 
 **A-Axis Labels** : None
 
-| Chart Index | Chart Title |
-| --- | --- |
-| 1   | asn=Expense L2 2025 |
+### Bar Chart Data   
+
+| Chart Index | Chart Title         | Sum | Absolute Sum | Max | Threshold
+| --- |---------------------| --- | --- | --- | --- |
+| 1   | asn=Expense L2 2025 | -177314.13 | 177314.13 | 32764.84 | 1638.42
+
+### Bar Chart Element Data  
 
 | **Chart Index** | **Period** | **Bar Label** | **Bar Color** | **Bar Value** | **Comment** |
 | --- | --- | --- | --- | --- | --- |
@@ -131,8 +130,6 @@ URL: _api/charts/render?chart=bar&asn=Expense&level=2&year=2025_
 
 URL: _api/charts/render?chart=area&asn=Expense&level=2&year=2025_
 
-### Stacked Area Chart Data (authoritative)  
-
 <br/>**Chart Cardinality**: Stacked area chart always has a single chart index
 
 **Color by Assignment**: Each stacked area has a different color
@@ -141,9 +138,13 @@ URL: _api/charts/render?chart=area&asn=Expense&level=2&year=2025_
 
 **Color Palette**: 16 color palette is provided to the renderer. Color is derived from color index and palette.
 
-| Chart Index | Chart Title |
-| --- | --- |
-| 1   | asn=Expense L2 2025 |
+### Stacked Area Chart Data  
+
+| Chart Index | Chart Title         | Sum | Absolute Sum | Max | Threshold
+| --- |---------------------| --- | --- | --- | --- |
+| 1   | asn=Expense L2 2025 | -177314.13 | 177314.13 | 32764.84 | 1638.42
+
+### Stacked Area Chart Element Data 
 
 | **Chart Index** | **Period** | **Area Label** | **Area Color** | **Area Value** | **Comment** |
 | --- | --- | --- | --- | --- | --- |
