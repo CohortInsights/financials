@@ -71,5 +71,3 @@ def build_txn_query(args: argparse.Namespace) -> Dict[str, Any]:
         }
 
     return query
-
-Chec
