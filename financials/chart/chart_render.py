@@ -1,5 +1,6 @@
 from typing import Dict, Any, List, Optional
 import io
+import json
 import pandas as pd
 import matplotlib.pyplot as plt
 
@@ -76,8 +77,10 @@ def compute_chart_v2(
     # ------------------------------------------------------------
     hierarchy = _normalize_hierarchy(
         render_df,
-        chart_spec=chart_spec,
     )
+
+    print (hierarchy)
+    return hierarchy
 
     # ------------------------------------------------------------
     # 5. Apply fractional filtering (min_fraction)
@@ -149,112 +152,101 @@ def compute_chart_v2(
 # Hierarchy normalization
 # ------------------------------------------------------------------
 
-def _normalize_hierarchy(
-    df: pd.DataFrame,
-    *,
-    chart_spec: dict,
-) -> dict:
+def _normalize_hierarchy(df: pd.DataFrame) -> dict:
     """
-    Normalize hierarchical structure from an ordered table.
+    Determine whether the chart should be rendered as single-level or hierarchical
+    (parent/child), based strictly on ROW COUNT per level — not distinct assignments.
 
     Rules:
-    - Depth derived from assignment prefix
-    - Drop levels with only one assignment
-    - Retain at most two adjacent deepest levels
-    - Preserve table order
+    - Compute depth from assignment prefix (x.y.z → depth 3).
+    - Drop any depth that produces only ONE ROW in the render context.
+    - From remaining depths, keep the deepest two.
+    - If only one depth remains → single_level
+    - If two depths remain → hierarchical (stacked)
     """
 
-    if df.empty or "assignment" not in df.columns:
-        return {"mode": "single_level", "rows": []}
-
     work = df.copy()
+
+    if "assignment" not in work.columns or work.empty:
+        return {
+            "mode": "single_level",
+            "rows": []
+        }
+
+    # ------------------------------------------------------------------
+    # 1. Compute depth from assignment prefix
+    # ------------------------------------------------------------------
     work["_depth"] = work["assignment"].apply(lambda a: a.count(".") + 1)
 
-    depth_counts = (
-        work.groupby("_depth")["assignment"].nunique().to_dict()
+    # ------------------------------------------------------------------
+    # 2. Count ROWS per depth (not distinct assignments)
+    # ------------------------------------------------------------------
+    depth_row_counts = (
+        work.groupby("_depth")
+            .size()
+            .to_dict()
     )
 
-    valid_depths = [d for d, n in depth_counts.items() if n > 1]
+    # ------------------------------------------------------------------
+    # 3. Keep only depths that contribute >1 row
+    # ------------------------------------------------------------------
+    valid_depths = sorted(
+        d for d, n in depth_row_counts.items() if n > 1
+    )
 
+    # If nothing meaningful remains, fall back to single-level
     if not valid_depths:
-        valid_depths = [work["_depth"].min()]
+        return {
+            "mode": "single_level",
+            "rows": []
+        }
 
-    valid_depths = sorted(valid_depths)
+    # ------------------------------------------------------------------
+    # 4. Keep at most the deepest two levels
+    # ------------------------------------------------------------------
+    kept_depths = valid_depths[-2:]
 
-    if len(valid_depths) > 2:
-        deepest = valid_depths[-1]
-        candidate = deepest - 1
-        valid_depths = (
-            [candidate, deepest] if candidate in valid_depths else [deepest]
-        )
+    # ------------------------------------------------------------------
+    # 5. Filter rows to kept depths
+    # ------------------------------------------------------------------
+    work = work[work["_depth"].isin(kept_depths)].copy()
 
-    work = work[work["_depth"].isin(valid_depths)].copy()
+    # ------------------------------------------------------------------
+    # 6. Decide mode
+    # ------------------------------------------------------------------
+    if len(kept_depths) == 1:
+        return {
+            "mode": "single_level",
+            "rows": []
+        }
 
-    # ------------------------------------------------------------
-    # Single-level
-    # ------------------------------------------------------------
-    if len(valid_depths) == 1:
-        assignments = work["assignment"].tolist()
-        prefix = _common_assignment_prefix(assignments)
+    # ------------------------------------------------------------------
+    # 7. Hierarchical case: identify parent/child roles
+    # ------------------------------------------------------------------
+    parent_depth, child_depth = kept_depths
 
-        rows = []
-        for _, row in work.iterrows():
-            rows.append({
-                "assignment": row["assignment"],
-                "assignment_suffix": row["assignment"][len(prefix):].lstrip("."),
-                "period": row.get("period"),
-                "year": row.get("year"),
-                "value": row["amount"],
-                "role": "single",
-                "parent_assignment": None,
-            })
-
-        return {"mode": "single_level", "rows": rows}
-
-    # ------------------------------------------------------------
-    # Two-level (stacked)
-    # ------------------------------------------------------------
-    parent_depth, child_depth = valid_depths
-
-    parents = set(
-        work.loc[work["_depth"] == parent_depth, "assignment"]
+    work["role"] = work["_depth"].apply(
+        lambda d: "parent" if d == parent_depth else "child"
     )
 
-    parent_prefix = _common_assignment_prefix(list(parents))
-    child_assignments = work.loc[
-        work["_depth"] == child_depth, "assignment"
-    ].tolist()
-    child_prefix = _common_assignment_prefix(child_assignments)
+    # Parent assignment is the prefix up to parent depth
+    def parent_assignment(a: str, depth: int) -> str:
+        parts = a.split(".")
+        return ".".join(parts[:depth])
 
-    rows = []
+    work["parent_assignment"] = work.apply(
+        lambda r: (
+            None
+            if r["role"] == "parent"
+            else parent_assignment(r["assignment"], parent_depth)
+        ),
+        axis=1
+    )
 
-    for _, row in work.iterrows():
-        assignment = row["assignment"]
-        depth = row["_depth"]
-
-        if depth == parent_depth:
-            rows.append({
-                "assignment": assignment,
-                "assignment_suffix": assignment[len(parent_prefix):].lstrip("."),
-                "period": row.get("period"),
-                "year": row.get("year"),
-                "value": row["amount"],
-                "role": "parent",
-                "parent_assignment": None,
-            })
-        else:
-            parent = assignment.rsplit(".", 1)[0]
-            rows.append({
-                "assignment": assignment,
-                "assignment_suffix": assignment[len(child_prefix):].lstrip("."),
-                "period": row.get("period"),
-                "year": row.get("year"),
-                "value": row["amount"],
-                "role": "child",
-                "parent_assignment": parent,
-            })
-
-    return {"mode": "stacked", "rows": rows}
+    return {
+        "mode": "hierarchical",
+        "rows": work
+    }
 
 
 def _common_assignment_prefix(assignments: List[str]) -> str:

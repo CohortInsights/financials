@@ -42,7 +42,7 @@
 
 ## Pie Chart Representation
 
-URL: _api/charts/data?chart=pie&asn=Food&level=2&year=2025_
+URL: _api/charts/data?chart=pie&asn=Food&level=3&year=2024,2025
 
 **Chart Index:** In multi period pie charts, charts are indexed by Period
 
@@ -76,7 +76,7 @@ URL: _api/charts/data?chart=pie&asn=Food&level=2&year=2025_
 
 ## Bar Chart Representation
 
-URL: _api/charts/render?chart=bar&asn=Food&level=2&year=2025_
+URL: _api/charts/render?chart=bar&asn=Food&level=3&year=2024,2025
 
 **Chart Index**: All bars are on the same chart.
 
@@ -113,7 +113,7 @@ URL: _api/charts/render?chart=bar&asn=Food&level=2&year=2025_
 
 ## Stacked Area Chart Representation
 
-URL: _api/charts/render?chart=bar&asn=Food&level=2&year=2025_
+URL: _api/charts/render?chart=area&asn=Food&level=3&year=2024,2025
 
 **Chart Index**: All bars are on the same chart.
 
