@@ -46,6 +46,8 @@ URL: _api/charts/data?chart=pie&asn=Restaurant,Groceries&level=3&year=2024,2025
 
 **Chart Index:** In multi period pie charts, charts are indexed by Period
 
+**Slice Percent**: Rendering should use Slice Percent column data and not re-compute it. Percent is computed from the sum of all values with the same chart index.
+
 **Slice Color**: By Assignment across all charts
 
 **Slice Labels**: Assignment only (**no** period)
@@ -66,24 +68,24 @@ URL: _api/charts/data?chart=pie&asn=Restaurant,Groceries&level=3&year=2024,2025
 
 ## Pie Chart Element Data
 
-| **Chart Index** | **Period** | **Pie Label** | **Slice Value** | **Color Index** |
-| --- | --- | --- | --- | --- |
-| 1   | 2024-Q1 | Restaurant | \$3,308.33 | 1   |
-| 1   | 2024-Q1 | Groceries | \$2,711.49 | 2   |
-| 2   | 2025-Q1 | Restaurant | \$3,177.83 | 1   |
-| 2   | 2025-Q1 | Groceries | \$2,967.43 | 2   |
-| 3   | 2024-Q2 | Restaurant | \$3,139.13 | 1   |
-| 3   | 2024-Q2 | Groceries | \$2,675.07 | 2   |
-| 4   | 2025-Q2 | Restaurant | \$2,698.58 | 1   |
-| 4   | 2025-Q2 | Groceries | \$2,198.52 | 2   |
-| 5   | 2024-Q3 | Restaurant | \$2,564.28 | 1   |
-| 5   | 2024-Q3 | Groceries | \$2,526.50 | 2   |
-| 6   | 2025-Q3 | Restaurant | \$3,802.34 | 1   |
-| 6   | 2025-Q3 | Groceries | \$2,777.03 | 2   |
-| 7   | 2024-Q4 | Restaurant | \$1,808.48 | 1   |
-| 7   | 2024-Q4 | Groceries | \$2,900.66 | 2   |
-| 8   | 2025-Q4 | Restaurant | \$2,570.82 | 1   |
-| 8   | 2025-Q4 | Groceries | \$3,502.98 | 2   |
+| **Chart Index** | **Period** | **Slice Label** | **Slice Value** | **Slice Percent** | **Color Index** | **Relevant Sum** |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1   | 2024-Q1 | Restaurant | \$3,308.33 | 54.96% | 1   | 6020 |
+| 1   | 2024-Q1 | Groceries | \$2,711.49 | 45.04% | 2   | 6020 |
+| 2   | 2024-Q2 | Restaurant | \$3,139.13 | 53.99% | 1   | 5814 |
+| 2   | 2024-Q2 | Groceries | \$2,675.07 | 46.01% | 2   | 5814 |
+| 3   | 2024-Q3 | Restaurant | \$2,564.28 | 50.37% | 1   | 5091 |
+| 3   | 2024-Q3 | Groceries | \$2,526.50 | 49.63% | 2   | 5091 |
+| 4   | 2024-Q4 | Restaurant | \$1,808.48 | 38.40% | 1   | 4709 |
+| 4   | 2024-Q4 | Groceries | \$2,900.66 | 61.60% | 2   | 4709 |
+| 5   | 2025-Q1 | Restaurant | \$3,177.83 | 51.71% | 1   | 6145 |
+| 5   | 2025-Q1 | Groceries | \$2,967.43 | 48.29% | 2   | 6145 |
+| 6   | 2025-Q2 | Restaurant | \$2,698.58 | 55.11% | 1   | 4897 |
+| 6   | 2025-Q2 | Groceries | \$2,198.52 | 44.89% | 2   | 4897 |
+| 7   | 2025-Q3 | Restaurant | \$3,802.34 | 57.80% | 1   | 6579 |
+| 7   | 2025-Q3 | Groceries | \$2,777.03 | 42.21% | 2   | 6579 |
+| 8   | 2025-Q4 | Restaurant | \$2,570.82 | 42.32% | 1   | 6074 |
+| 8   | 2025-Q4 | Groceries | \$3,502.98 | 57.67% | 2   | 6074 |
 
 ## Bar Chart Representation
 

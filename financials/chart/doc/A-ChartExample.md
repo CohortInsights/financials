@@ -44,13 +44,9 @@ Source Data (Filtered Assignments)
 | Min Frac | 0.05 |
 | Common prefix | Expense. |
 
-**Chart Row Sequence:** Input order of chart data is authoritative. Renderer must preserve the sequence of chart elements (pie slices, bars, areas, etc.).
+**Sign Handling:** For single-sign negative datasets, all chart values are emitted as absolute magnitudes. Renderer must not apply sign inversion.
 
-**Chart Sign Handling:** For single-sign negative datasets, all chart values are emitted as absolute magnitudes. Renderer must not apply sign inversion.
-
-**Chart Row Merging**: All values < threshold are removed and merged into "Other". Threshold is the product of the min_fraction and max_value.
-
-**Color Handling:** Chart data provides the complete color specification, including the palette and per-element color identity. The renderer must render colors exactly as provided and must not derive, remap, or substitute colors.
+**Row Merging**: All values < threshold are removed and merged into "Other". Threshold is the product of the min_fraction and max_value.
 
 ## Pie Chart Representation
 
@@ -98,7 +94,7 @@ URL: _api/charts/render?chart=bar&asn=Expense&level=2&year=2025_
 
 <br/>**Chart Cardinality**: Bar chart always has a single chart index
 
-**Color**: 4 color palette is provided to the renderer. Color is derived from color index and palette. For this case, there is only a single bar color.
+**Color**: By assignment
 
 **A-Axis Labels** : None
 

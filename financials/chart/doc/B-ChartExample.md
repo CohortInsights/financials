@@ -40,17 +40,21 @@
 | Min Frac | 0.05        |
 | Common Prefix | Expense.Food |
 
+**Sign Handling:** For single-sign negative datasets, all chart values are emitted as absolute magnitudes. Renderer must not apply sign inversion.
+
+**Row Merging**: All values < threshold are removed and merged into "Other". Threshold is the product of the min_fraction and max_value.
+
 ## Pie Chart Representation
 
 URL: _api/charts/data?chart=pie&asn=Food&level=3&year=2024,2025
 
 **Chart Index:** In multi period pie charts, charts are indexed by Period
 
+**Slice Percent**: Rendering should use Slice Percent column data and not re-compute it. Percent is computed from the sum of all values with the same chart index.
+
 **Slice Color**: By Assignment across all charts
 
 **Slice Labels**: Assignment only (**no** period)
-
-**Merging**: All value within the same period below global threshold are merged into "Other &lt;Period&gt;"
 
 ### Pie Chart Data
 
@@ -83,8 +87,6 @@ URL: _api/charts/render?chart=bar&asn=Food&level=3&year=2024,2025
 **Bar Color**: By period (2024,2025)
 
 **Bar Labels**: **Include** the period with assignment
-
-**Merging**: All value within the same period below global threshold are merged into "Other &lt;Period&gt;"
 
 **X-Axis Labels**: None
 
@@ -122,8 +124,6 @@ URL: _api/charts/render?chart=area&asn=Food&level=3&year=2024,2025
 **Area Ordering**: From bottom (Restaurant) to top (Other)
 
 **Area Color**: By assignment
-
-**Merging**: All value within the same period below global threshold are merged into "Other"
 
 **X-Axis Labels**: Each period
 
