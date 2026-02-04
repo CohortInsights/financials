@@ -1,4 +1,4 @@
-from pandas import DataFrame, Series, factorize
+from pandas import DataFrame, Series, factorize, concat
 import numpy as np
 
 from financials.chart.chart_common import ChartConfigError
@@ -155,11 +155,62 @@ def add_ignore_column(chart_data: DataFrame, chart_type: str) -> DataFrame:
 
     return chart_data
 
-def merge_ignore_rows_into_other(chart_data : DataFrame, chart_type : str):
-    for (_, _), idx in chart_data.groupby(
+
+def merge_ignore_rows_into_other(chart_data: DataFrame, chart_type: str) -> DataFrame:
+    """
+    Merge rows marked ignore=1 into an 'Other' row per (chart_index, level).
+
+    Strategy:
+    - Accumulate values/counts from ignored rows
+    - Reuse an existing 'Other' row if present
+    - Otherwise repurpose the first ignored row as 'Other'
+    - Recompute percent as values / mag
+    - Finally drop all remaining ignore==1 rows
+    """
+    for (chart_index, level), idx in chart_data.groupby(
         ["chart_index", "level"], sort=False
     ).groups.items():
-        ignore = chart_data.loc[idx, "ignore"]
+
+        group = chart_data.loc[idx]
+        ignored = group[group["ignore"] == 1]
+
+        if ignored.empty:
+            continue
+
+        sum_values = round(ignored["values"].sum(), 2)
+        sum_count = ignored["count"].sum()
+
+        if sum_values == 0 and sum_count == 0:
+            continue
+
+        # Case 1: existing "Other"
+        other_rows = group[(group["label"] == "Other") & (group["ignore"] == 0)]
+
+        if not other_rows.empty:
+            other_idx = other_rows.index[0]
+            mag = chart_data.loc[other_idx, "mag"]
+
+            chart_data.loc[other_idx, "values"] += sum_values
+            chart_data.loc[other_idx, "count"] += sum_count
+            chart_data.loc[other_idx, "percent"] = (
+                round(100.0 * chart_data.loc[other_idx, "values"] / mag, 1)
+            )
+
+        else:
+            # Case 2: repurpose first ignored row (DataFrame order)
+            first_ignored_idx = ignored.index[0]
+            mag = chart_data.loc[first_ignored_idx, "mag"]
+            percent = 100.0 * sum_values / mag
+            percent = round(percent, 1)
+
+            chart_data.loc[first_ignored_idx, "label"] = "Other"
+            chart_data.loc[first_ignored_idx, "values"] = sum_values
+            chart_data.loc[first_ignored_idx, "count"] = sum_count
+            chart_data.loc[first_ignored_idx, "percent"] = percent
+            chart_data.loc[first_ignored_idx, "ignore"] = 0
+
+    # Final cleanup: drop any remaining ignored rows
+    chart_data.drop(chart_data[chart_data["ignore"] == 1].index, inplace=True)
 
     return chart_data
 
