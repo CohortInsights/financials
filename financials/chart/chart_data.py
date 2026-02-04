@@ -94,32 +94,75 @@ def add_values_column(chart_data: DataFrame, chart_type: str, cfg: dict) -> Data
     Compute a "values" column derived from the "amount" column.
 
     Policy for handling negative values depends on chart type:
-    - Bar charts support mixed-sign data, so values are passed through unchanged.
+    - Bar charts support mixed-sign data, so values are passed through unchanged
+      *if there exists at least one positive value above threshold*.
     - Pie and stacked-area charts do NOT support mixed-sign data. For these charts,
-      negative values must be handled by converting to all same sign data
+      negative values must be handled by converting to all same-sign data.
+    - If all values are negative (or no positive value exceeds threshold),
+      values are converted to absolute magnitude.
 
-    :param chart_data: Assignment data containing an "amount" column
+    :param chart_data: Assignment data containing "amount" and "threshold" columns
     :param chart_type: String denoting the type of chart
-    :param cfg: Chart configuration dictionary (expects optional "min_frac")
-    :return: DataFrame with added "values" column and possibly filtered rows
+    :param cfg: Chart configuration dictionary (currently unused)
+    :return: DataFrame with added "values" column
     """
     # Bar charts can represent mixed positive and negative values directly
     support_mixed_sign = "bar" in chart_type
 
-    # Extract raw amount values
+    # Extract raw values
     values = chart_data["amount"].values
+    thresholds = chart_data["threshold"].values
 
-    pos_values = values[values >= 0]
-    neg_values = values[values < 0]
-    # Only apply special logic if negative values exist
-    if len(neg_values) > 0:
-        if len(pos_values) == 0 or not support_mixed_sign:
+    # Determine sign presence using threshold-aware logic
+    has_positive_over_threshold = (values > thresholds).any()
+    has_negative = (values < 0).any()
+
+    # Apply sign normalization rules
+    if has_negative:
+        if not has_positive_over_threshold or not support_mixed_sign:
             values = abs(values)
 
-    # Assign the computed values column
+    # Assign computed values column
     chart_data["values"] = values
 
     return chart_data
+
+
+def add_ignore_column(chart_data: DataFrame, chart_type: str) -> DataFrame:
+    """
+    Mark rows whose absolute value falls below their threshold.
+
+    Adds a column:
+    - ignore = 1 if abs(values) < threshold
+    - ignore = 0 otherwise
+
+    Grouping is performed by (chart_index, level) to respect chart semantics.
+    """
+    # Initialize column to default (not dropped)
+    chart_data["ignore"] = 0
+
+    for (_, _), idx in chart_data.groupby(
+        ["chart_index", "level"], sort=False
+    ).groups.items():
+
+        values = chart_data.loc[idx, "values"]
+        thresh = chart_data.loc[idx, "threshold"]
+
+        abs_values = values.abs()
+
+        # Mark rows below threshold
+        chart_data.loc[idx, "ignore"] = (abs_values < thresh).astype(int)
+
+    return chart_data
+
+def merge_ignore_rows_into_other(chart_data : DataFrame, chart_type : str):
+    for (_, _), idx in chart_data.groupby(
+        ["chart_index", "level"], sort=False
+    ).groups.items():
+        ignore = chart_data.loc[idx, "ignore"]
+
+    return chart_data
+
 
 def add_label_column(chart_data : DataFrame, chart_type : str) -> DataFrame:
     full_labels = chart_data["assignment"]
@@ -127,15 +170,6 @@ def add_label_column(chart_data : DataFrame, chart_type : str) -> DataFrame:
     chart_data['label'] = label
     return chart_data
 
-
-from pandas import DataFrame, Series
-import pandas as pd
-
-from pandas import DataFrame, Series
-import pandas as pd
-
-
-from pandas import DataFrame, Series
 
 def add_stats_columns(chart_data: DataFrame, chart_type: str, cfg: dict) -> DataFrame:
     min_frac = cfg.get("min_frac", 0)
@@ -200,6 +234,8 @@ def compute_chart_data(source_data : DataFrame, chart_type : str, cfg : dict, re
     # Apply stats and merge values < threshold
     add_stats_columns(chart_data, chart_type, cfg)
     add_values_column(chart_data,chart_type, cfg)
+    add_ignore_column(chart_data, cfg)
+    merge_ignore_rows_into_other(chart_data, cfg)
     # Add final two presentation columns
     add_title_column(chart_data, chart_type, cfg)
     add_color_column(chart_data, chart_type, cfg)
