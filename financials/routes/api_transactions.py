@@ -378,8 +378,8 @@ def group_by_assignment_time_period(df: pd.DataFrame, args):
     grouped["sort_period"] = grouped["period"].apply(extract_period)
 
     grouped = grouped.sort_values(
-        ["sort_period", "assignment_amount_sum", "sort_year"],
-        ascending=[True, False, True]
+        ["level","sort_period", "assignment_amount_sum", "sort_year"],
+        ascending=[True, True, False, True]
     ).reset_index(drop=True)
 
     # Drop only non-canonical helper
