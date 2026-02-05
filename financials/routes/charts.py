@@ -11,7 +11,10 @@ from financials.chart.chart_data import compute_chart_elements, compute_figure_d
 from financials.chart.chart_common import (
     ChartDataError,
     ChartConfigError,
+    figure_to_bytes
 )
+
+from financials.chart.chart_render import render_pies
 
 def compute_chart_data(args: dict) -> DataFrame:
     chart_type = args.get("chart")
@@ -67,7 +70,7 @@ def api_chart_data():
         }), 500
 
 
-@app.route("/api/charts/fig")
+@app.route("/api/charts/figures")
 def api_figure_data():
     try:
         args = request.args.to_dict()
@@ -94,10 +97,18 @@ def api_figure_data():
 
 @app.route("/api/charts/render")
 def api_chart_render():
+    figure = None
+
     try:
         args = request.args.to_dict()
         chart_type = args.get("chart")
-        png_bytes : bytes = None
+        chart_elements = compute_chart_data(args)
+        fig_data = compute_figure_data(chart_elements=chart_elements,chart_type=chart_type,cfg={})
+        if "pie" in chart_type:
+            figure = render_pies(chart_elements=chart_elements, figure_data=fig_data)
+        if not figure:
+            raise ChartDataError("compute_figure_data did not return a figure")
+        png_bytes : bytes = figure_to_bytes(figure,format="png")
 
         return Response(
             png_bytes,

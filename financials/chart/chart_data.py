@@ -16,6 +16,11 @@ def get_char_types() -> dict:
     """
     return global_chart_types
 
+def add_row_indexes(chart_data: DataFrame) -> DataFrame:
+    # Insert at first column position a 1-based row id
+    chart_data.insert(0, "row_id", range(1, len(chart_data) + 1))
+    return chart_data
+
 def add_chart_indexes(chart_data: DataFrame, chart_type: str) -> DataFrame:
     """
     Adds the column that encodes a column named "chart_index" (1-n) for each intended chart instance
@@ -27,7 +32,13 @@ def add_chart_indexes(chart_data: DataFrame, chart_type: str) -> DataFrame:
     sort_keys = ["chart_index","period"]
 
     # Area plot one level at a time chronologically across periods
-    if "area" in chart_type:
+    if "bar" in chart_type:
+        level_count = chart_data["level"].nunique()
+        if level_count > 2:
+            # We cannot use segments for more than 2 levels
+            # Just create separate bar charts if there are more than 2 levels (rare)
+            split_columns = ["level"]
+    elif "area" in chart_type:
         split_columns = ["level"]
     # Pie charts plot one level and period at a time
     elif "pie" in chart_type:
@@ -115,6 +126,7 @@ def add_values_column(chart_data: DataFrame, chart_type: str, cfg: dict) -> Data
 
     # Extract raw values and ignore flags
     values = chart_data["amount"].values
+    abs_values = abs(values)
     ignore = chart_data["ignore"].values
 
     # Determine sign presence using ignore-aware logic
@@ -124,10 +136,15 @@ def add_values_column(chart_data: DataFrame, chart_type: str, cfg: dict) -> Data
     # Apply sign normalization rules
     if has_negative:
         if not has_relevant_positive or not support_mixed_sign:
-            values = abs(values)
+            values = abs_values
 
     # Assign computed values column
     chart_data["values"] = values
+    max_abs_value = abs_values.max()
+    # Need a scaled down version of values if they exceed 10,000
+    if ( max_abs_value ) >= 10000:
+        scaled_values = 0.001*values
+        chart_data["scaled_values"] = scaled_values.round(2)
 
     return chart_data
 
@@ -226,6 +243,28 @@ def add_label_column(chart_data : DataFrame, chart_type : str) -> DataFrame:
     chart_data['label'] = label
     return chart_data
 
+def add_parent_column(chart_data: DataFrame, chart_type: str) -> DataFrame:
+    # Only bar charts have a parent column
+    if "bar" not in chart_type:
+        return chart_data
+
+    # Build lookup: (period, assignment) -> row_id
+    lookup = {
+        (row.period, row.assignment): row.row_id
+        for row in chart_data.itertuples(index=False)
+    }
+
+    def resolve_parent(row):
+        asn = row.assignment
+        if "." not in asn:
+            return None
+
+        parent_asn = asn.rsplit(".", 1)[0]
+        return lookup.get((row.period, parent_asn))
+
+    chart_data["parent"] = chart_data.apply(resolve_parent, axis=1)
+    return chart_data
+
 
 def add_stats_columns(chart_data: DataFrame, chart_type: str, cfg: dict) -> DataFrame:
     min_frac = cfg.get("min_frac", 0)
@@ -271,9 +310,10 @@ def add_color_column(chart_data : DataFrame, chart_type : str, cfg : dict) -> Da
     chart_data["color"] = 0
 
     if "bar" in chart_type:
-        # For bar charts, we emphasize comparison by year
-        # For a single year, there will be only 1 color. Fine.
-        color_keys = ["sort_year"]
+        n_years = chart_data["sort_year"].nunique()
+        if n_years > 1:
+            # For multiple years, we emphasize comparison by year
+            color_keys = ["sort_year"]
 
     # Assign color by color_keys. Reset to 1 at chart index boundaries
     for chart_index, idx in chart_data.groupby("chart_index", sort=False).groups.items():
@@ -282,20 +322,147 @@ def add_color_column(chart_data : DataFrame, chart_type : str, cfg : dict) -> Da
 
     return chart_data
 
-def add_fig_title(chart_data : DataFrame, chart_type : str, cfg : dict) -> DataFrame:
-    return chart_data
+
+def add_frame_dimensions(fig_data : DataFrame, chart_type : str) -> DataFrame:
+    orientations = None
+    fig_indexes = fig_data['fig_index'].values
+    n_elements_array = fig_data['n_elements'].values
+    n_time_points_array = fig_data['n_time_points'].values
+    if 'bar' in chart_type:
+        orientations = fig_data['element_orientation'].values
+
+    frame_width_list = []
+    frame_height_list = []
+
+    bar_element_size = 25
+    area_element_size = 300
+    pie_slice_size = 60
+    fixed_frame_size = 600
+
+    n_frames = len(fig_data)
+    for index in fig_indexes:
+        idx = index - 1 # Needed for array indexing
+        frame_width, frame_height = (0,0)
+        n_elements = n_elements_array[idx]
+        n_time_points = n_time_points_array[idx]
+        if 'area' in chart_type:
+            frame_width = fixed_frame_size
+            frame_height = n_elements * area_element_size
+        elif 'bar' in chart_type:
+            orient = orientations[idx]
+            if orient == "horizontal":
+                frame_height = n_elements * bar_element_size
+                frame_width = fixed_frame_size
+            elif orient == "vertical":
+                frame_height = n_frames * fixed_frame_size
+                frame_width = n_elements * bar_element_size
+        elif 'pie' in chart_type:
+            frame_width = n_elements * pie_slice_size
+            frame_height = frame_width
+        frame_width_list.append(frame_width)
+        frame_height_list.append(frame_height)
+    fig_data['frame_width'] = frame_width_list
+    fig_data['frame_height'] = frame_height_list
+    fig_data['dpi'] = 150
+    return fig_data
+
+
+def add_fig_title_axes(fig_data : DataFrame, elements : DataFrame, chart_type : str, cfg : dict) -> DataFrame:
+    c = 'fig_index'
+    fig_indexes = fig_data[c].values
+    titles = []
+    duration_list = []
+    time_point_list = []
+    element_count_list = []
+    orientation_list = []
+    grid_period_list, grid_year_list = [], []
+    segmented_list = []
+    start_year = elements['sort_year'].min()
+
+    for index in fig_indexes:
+        index_elements = elements[elements['chart_index'] == index]
+        assignments = index_elements["assignment"].values
+        asn : str = assignments[0]
+        period = index_elements["period"].values
+        years = index_elements["sort_year"].values
+        start_period = index_elements['sort_period'].values.min()
+        y1,y2 = years.min(), years.max()
+        p1,p2 = period.min(), period.max()
+        t = asn.rsplit(".", 1)[0]
+        duration = 'Annually'
+        n_periods = 1
+        segmented = False
+        orientation = "vertical"
+
+        if '-' in p1:
+            duration = 'Monthly'
+            n_periods = 12
+            if 'Q' in p1:
+                duration = 'Quarterly'
+                n_periods = 4
+        if y1 == y2:
+            if p1 == p2:
+                t += f" {p1}"
+            else:
+                t += f" {y1} {duration}"
+        else:
+            t += f" {y1}-{y2} {duration}"
+
+        grid_year_list.append(y1 - start_year)
+        grid_period_list.append((start_period-1) % n_periods)
+        duration_list.append(duration)
+        time_point_list.append((y2-y1+1)*n_periods)
+        element_count_list.append(len(index_elements))
+        if "bar" in chart_type:
+            if 'parent' in index_elements:
+                segmented = (
+                        "parent" in index_elements.columns
+                        and (index_elements["parent"] > 0).any()
+                )
+            orientation = "horizontal"
+        segmented_list.append(segmented)
+        orientation_list.append(orientation)
+        titles.append(t)
+
+    fig_data['title'] = titles
+    fig_data['x_axis'] = "time"
+    fig_data['y_axis'] = "currency"
+    fig_data['currency_col'] = "values"
+    fig_data['currency_unit'] = "dollars"
+    fig_data['currency_format'] = "$ {value:,.0f}"
+    if 'scaled_values' in elements.columns:
+        fig_data['currency_col'] = "scaled_values"
+        fig_data['currency_unit'] = "dollars_thousands"
+        fig_data['currency_format'] = "$ {value:,.1f}K"
+    fig_data['currency_format'] = "$"
+    fig_data['time_col'] = "period"
+    orientation = orientation_list[0]
+    if orientation == "horizontal":
+        fig_data['x_axis'] = "currency"
+        fig_data['y_axis'] = "time"
+    if "pie" in chart_type:
+        fig_data['currency_col'] = "percent"
+        fig_data['currency_unit'] = "percent"
+        fig_data['currency_format'] = "%"
+    fig_data['time_frequency'] = duration_list
+    fig_data['n_time_points'] = time_point_list
+    fig_data['n_elements'] = element_count_list
+    fig_data["segments"] = segmented_list
+    fig_data['element_orientation'] = orientation_list
+    if 'pie' in chart_type:
+        fig_data['grid_year'] = grid_year_list
+        fig_data['grid_period'] = grid_period_list
+    return fig_data
 
 
 def compute_figure_data(chart_elements : DataFrame, chart_type : str, cfg : dict) -> DataFrame:
-    fig_data = {}
-    for chart_index, elements in chart_elements.groupby("chart_index", sort=False):
-        # df_j is the DataFrame slice for this figure
-        # row order is preserved exactly
-        pass
-
-    fig_data = {
-    }
-    return DataFrame(data=fig_data)
+    fig_indexes = chart_elements["chart_index"].unique().tolist()
+    fig_data = { 'fig_index' : fig_indexes }
+    fig_df = DataFrame(data=fig_data)
+    fig_df["chart_type"] = chart_type
+    add_fig_title_axes(fig_df, chart_elements, chart_type, cfg)
+    add_frame_dimensions(fig_df, chart_type)
+    return fig_df
 
 
 def compute_chart_elements(source_data : DataFrame, chart_type : str, cfg : dict) -> DataFrame:
@@ -312,9 +479,11 @@ def compute_chart_elements(source_data : DataFrame, chart_type : str, cfg : dict
     chart_data = source_data.copy()
     # Add enriched chart data one column at a time
     # ----- Begin Adding Element Columns
+    add_row_indexes(chart_data)
     add_chart_indexes(chart_data,chart_type)
     add_cluster_indexes(chart_data,chart_type)
     add_label_column(chart_data,chart_type)
+    add_parent_column(chart_data, chart_type)
     add_stats_columns(chart_data, chart_type, cfg)
     add_ignore_column(chart_data, cfg)
     add_values_column(chart_data,chart_type, cfg)

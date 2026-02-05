@@ -1,7 +1,5 @@
-import json
 from pathlib import Path
-import pandas as pd
-from financials.routes.api_transactions import compute_assignments
+import io
 
 
 CFG_DIR = Path(__file__).resolve().parent / "cfg"
@@ -12,6 +10,18 @@ class ChartDataError(Exception):
 
 class ChartConfigError(Exception):
     pass
+
+
+def figure_to_bytes(fig, *, format: str = "png") -> bytes:
+    """
+    Convert a Matplotlib figure to raw bytes.
+
+    No inference. No defaults beyond format.
+    """
+    buf = io.BytesIO()
+    fig.savefig(buf, format=format)
+    buf.seek(0)
+    return buf.read()
 
 
 def render_warnings(fig, warnings, chart_spec, *, fontsize=8):
