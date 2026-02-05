@@ -1,12 +1,11 @@
 from pandas import DataFrame, Series, factorize, concat
-import numpy as np
 
 from financials.chart.chart_common import ChartConfigError
 
 global_chart_types: dict = {
     "pie": "Compare relative percentages of assignments for a single or multiple data periods",
     "bar": "Simple and stacked bar charts of assignment amounts over single or multiple data periods",
-    "area": "evolution of assignment amounts over time, with areas stacked on top of each other to show both individual trends and the total, cumulative trend"
+    "stacked_area": "evolution of assignment amounts over time, with areas stacked on top of each other to show both individual trends and the total, cumulative trend"
 }
 
 
@@ -23,11 +22,14 @@ def add_chart_indexes(chart_data: DataFrame, chart_type: str) -> DataFrame:
     :param chart_data: Filtered assignment data
     :return: The input data after adding the 'chart_index' column
     """
+    # Default is that all elements belong to the same chart
     split_columns = []
     sort_keys = ["chart_index","period"]
 
+    # Area plot one level at a time chronologically across periods
     if "area" in chart_type:
         split_columns = ["level"]
+    # Pie charts plot one level and period at a time
     elif "pie" in chart_type:
         split_columns = ["level", "period"]
 
@@ -53,8 +55,8 @@ def add_chart_indexes(chart_data: DataFrame, chart_type: str) -> DataFrame:
             chart_data.loc[idx, column_name] = chart_index
             chart_index += 1
 
-        # Stable sort by chart_index so charts are contiguous,
-        # while preserving original order *within* each chart
+        # Stable sort according to sort_keys
+        # Preserve original order *within* each chart
         chart_data.sort_values(
             by=sort_keys,
             kind="stable",
@@ -74,7 +76,9 @@ def add_cluster_indexes(chart_data: DataFrame, chart_type: str) -> DataFrame:
     :param chart_data: Filtered assignment data
     :return: The input data after adding the 'cluster' column
     """
+    # By default we cluster elements within the same time chart and time period
     group_columns = ["chart_index","period"]
+    # In bar charts we compare bars of the same assignment by clustering them across periods
     if "bar" in chart_type:
         group_columns = ["chart_index","assignment"]
 
@@ -91,7 +95,7 @@ def add_cluster_indexes(chart_data: DataFrame, chart_type: str) -> DataFrame:
 
 def add_values_column(chart_data: DataFrame, chart_type: str, cfg: dict) -> DataFrame:
     """
-    Compute a "values" column derived from the "amount" column.
+    Compute a "values" column derived from the "amount"  and stats columns.
 
     Policy for handling negative values depends on chart type:
     - Bar charts support mixed-sign data, so values are passed through unchanged
@@ -109,17 +113,17 @@ def add_values_column(chart_data: DataFrame, chart_type: str, cfg: dict) -> Data
     # Bar charts can represent mixed positive and negative values directly
     support_mixed_sign = "bar" in chart_type
 
-    # Extract raw values
+    # Extract raw values and ignore flags
     values = chart_data["amount"].values
-    thresholds = chart_data["threshold"].values
+    ignore = chart_data["ignore"].values
 
-    # Determine sign presence using threshold-aware logic
-    has_positive_over_threshold = (values > thresholds).any()
+    # Determine sign presence using ignore-aware logic
+    has_relevant_positive = ((values > 0) & (ignore == 0)).any()
     has_negative = (values < 0).any()
 
     # Apply sign normalization rules
     if has_negative:
-        if not has_positive_over_threshold or not support_mixed_sign:
+        if not has_relevant_positive or not support_mixed_sign:
             values = abs(values)
 
     # Assign computed values column
@@ -145,7 +149,7 @@ def add_ignore_column(chart_data: DataFrame, chart_type: str) -> DataFrame:
         ["chart_index", "level"], sort=False
     ).groups.items():
 
-        values = chart_data.loc[idx, "values"]
+        values = chart_data.loc[idx, "amount"]
         thresh = chart_data.loc[idx, "threshold"]
 
         abs_values = values.abs()
@@ -211,6 +215,7 @@ def merge_ignore_rows_into_other(chart_data: DataFrame, chart_type: str) -> Data
 
     # Final cleanup: drop any remaining ignored rows
     chart_data.drop(chart_data[chart_data["ignore"] == 1].index, inplace=True)
+    chart_data.drop(columns=["ignore"], inplace=True)
 
     return chart_data
 
@@ -252,20 +257,50 @@ def add_stats_columns(chart_data: DataFrame, chart_type: str, cfg: dict) -> Data
 
     return chart_data
 
-
-def add_percent_column(chart_data : DataFrame, chart_type : str, cfg : dict) -> DataFrame:
-    return chart_data
-
-def add_title_column(chart_data : DataFrame, chart_type : str, cfg : dict) -> DataFrame:
-    return chart_data
-
 def add_color_column(chart_data : DataFrame, chart_type : str, cfg : dict) -> DataFrame:
+    """
+    Assign a color index column to each chart element. This does not choose the color itself but
+    rather which colors are the *same* across time periods and assignments
+    :param chart_data:
+    :param chart_type:
+    :param cfg:
+    :return:
+    """
+    # By default, a color is assigned per assignment across time periods within the same chart
+    color_keys = ["assignment"]
+    chart_data["color"] = 0
+
+    if "bar" in chart_type:
+        # For bar charts, we emphasize comparison by year
+        # For a single year, there will be only 1 color. Fine.
+        color_keys = ["sort_year"]
+
+    # Assign color by color_keys. Reset to 1 at chart index boundaries
+    for chart_index, idx in chart_data.groupby("chart_index", sort=False).groups.items():
+        keys = chart_data.loc[idx, color_keys].apply(tuple, axis=1)
+        chart_data.loc[idx, "color"] = (factorize(keys)[0] + 1).astype(int)
+
+    return chart_data
+
+def add_fig_title(chart_data : DataFrame, chart_type : str, cfg : dict) -> DataFrame:
     return chart_data
 
 
-def compute_chart_data(source_data : DataFrame, chart_type : str, cfg : dict, render=False) -> DataFrame:
+def compute_figure_data(chart_elements : DataFrame, chart_type : str, cfg : dict) -> DataFrame:
+    fig_data = {}
+    for chart_index, elements in chart_elements.groupby("chart_index", sort=False):
+        # df_j is the DataFrame slice for this figure
+        # row order is preserved exactly
+        pass
+
+    fig_data = {
+    }
+    return DataFrame(data=fig_data)
+
+
+def compute_chart_elements(source_data : DataFrame, chart_type : str, cfg : dict) -> DataFrame:
     """
-        Computes chart.data consistent with the specified assignment source data and chart_type
+    Computes chart elements consistent with the specified assignment source data and chart_type
 
     :param source_data: Filtered assignment data that is authoritative input
     :param chart_type: String denoting the type of chart
@@ -273,23 +308,17 @@ def compute_chart_data(source_data : DataFrame, chart_type : str, cfg : dict, re
     :param render: Whether to return chart data stripped to values relevant only to rendering
     :return:
     """
-    if chart_type not in global_chart_types.keys():
-        return ChartConfigError(f"Chart type {chart_type} not recognized")
-
     # Chart data starts as copy of input data
     chart_data = source_data.copy()
     # Add enriched chart data one column at a time
+    # ----- Begin Adding Element Columns
     add_chart_indexes(chart_data,chart_type)
     add_cluster_indexes(chart_data,chart_type)
     add_label_column(chart_data,chart_type)
-    # Apply stats and merge values < threshold
     add_stats_columns(chart_data, chart_type, cfg)
-    add_values_column(chart_data,chart_type, cfg)
     add_ignore_column(chart_data, cfg)
+    add_values_column(chart_data,chart_type, cfg)
     merge_ignore_rows_into_other(chart_data, cfg)
-    # Add final two presentation columns
-    add_title_column(chart_data, chart_type, cfg)
     add_color_column(chart_data, chart_type, cfg)
-    if render:
-        pass
+    # ----- End Adding Element Columns
     return chart_data

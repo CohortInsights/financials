@@ -1,200 +1,303 @@
 # Financials Portal — Charting Specification
 
-This README documents the **complete charting system** for the Financials Portal,
-including:
+This README documents the complete charting system for the Financials Portal.
 
-- Overall charting philosophy  
-- Definitions and terminology  
-- Canonical examples from real data  
+It is authoritative and intended to eliminate ambiguity in:
+- server-side computation
+- client-side consumption
+- renderer behavior
+- future extensions
 
-This document is authoritative and is intended to eliminate ambiguity in both
-client-side and server-side logic.
+This document defines both:
+- the conceptual meaning of charts, and
+- the data contracts that enforce those meanings.
 
-# 1. Charting Philosophy
+----------------------------------------------------------------
 
-1. The filtered Assignments table is the sole authoritative source for computing chart-data. All
-computation related to the assignments and not specific to
-chart types occurs in this top level layer
-2. The assignment table can be filtered by user controls. Current controls are assignment ("contains" filter) and level  
-3. Chart data specific to each chart type is computed from the filtered assignments. All post assignment computation, ordering, and
-chart content including color assignment are completed in this layer.
-4. The resulting chart data is the sole authoritative source for chart rendering
-5. The maplotlib engine is used to render charts from the chart data. The
-rendering layer makes *no* decisions or computations. Its only
-function is to render. Matplotlib is on the server side and can later 
-be augmented by client side rendering such as PlotLy. In either case,
-the renderers make no decisions and relies solely on the chart data for 
-content, layout, color assignments, labels, titles, etc.
+## 1. Charting Philosophy
 
-# 2. Source Data Model and Terminology
+1. The filtered Assignments table is the sole authoritative source for computing chart content.
+2. Assignment data may be filtered by user controls (currently assignment substring and level).
+3. All chart-specific computation (aggregation, ordering, sign handling, color assignment, percentages) is completed before rendering.
+4. The resulting chart data is the sole authoritative input to rendering.
+5. Renderers (Matplotlib server-side; Plotly or others later) perform no decisions, inference, sorting, or computation. Their only job is to render what they are given.
 
-## 2.1 Assignment Levels  
-Assignments are hierarchical:  
-Example: `Expense.Food.Restaurant` has:
+----------------------------------------------------------------
 
-- Level 1: Expense  
-- Level 2: Expense.Food  
-- Level 3: Expense.Food.Restaurant  
+## 2. Pipeline Overview
 
-Rows can be chosen in the assignments tab with a user filter. For example, a filter of "2,3" would result
-in only rows appearing with a level of 2 or 3.
+A single chart query expresses intent and may be materialized at multiple stages.
 
-### Major Level
-The **first level** whose filtered data contains **more than one distinct
-item (row)**.  
-This level determines the assignment dimension that drives the chart.
+Example query (as URL parameters):
 
-### Minor Level  
-The assignment level deeper than the major level (if not filtered). In
-a filter of 2,3 where both levels contain more than one row, 2 is
-the major level and 3 is the minor level.
+    ?chart=area&asn=Food&level=3,4&years=2023,2024,2025
 
-### Levels Left After Charting
-When charting occurs, the number of items will be computed for each level
-* Let n = the number of levels containing MORE than one item
-- n == 1: A single major level exists in the chart
-- n == 2: A major and minor level exists in the chart
-- n > 2: The two most deep levels are chosen to be the major and minor level
+Routes using the same query:
 
-## 2.2 Time Structure
+- /api/assignments     -> source data (filtered assignments)
+- /api/charts/data     -> chart elements
+- /api/charts/figures  -> figure specifications
+- /api/charts/render   -> rendered image (PNG/SVG)
 
-Three independent notions:
+Each route answers a different question.
+No route recomputes decisions made upstream.
 
-### Literal Period (`period`)
-Exact string from the table:  
-Examples: `2023`, `2025-Q3`, `2025-07`.
+The browser JavaScript consumes:
+- /api/assignments for tables and drill-down
+- /api/charts/render for final visuals
 
-### Canonical Year (`sort_year`)
-Integer year extracted by server.
+All routes are directly accessible for manual inspection and debugging.
 
-### Canonical Period Index (`sort_period`)
-Integer period ordering number created by server for correct chronological order:
-- Annual view: `sort_period = 1`
-- Quarter view: `sort_period = 1…4`
-- Month view: `sort_period = 1…12`
+----------------------------------------------------------------
 
-### Time Categories  
-- **Y1**: one year present  
-- **Ym**: multiple years present  
-- **P1**: one period present (meaning *annual*)  
-- **Pm**: multiple periods (quarterly or monthly) present  
+## 3. Source Data Model and Terminology
 
-## 2.3 Sign Behavior
+### 3.1 Assignment Levels
+
+Assignments are hierarchical.
+
+Example:
+    Expense.Food.Restaurant
+
+Levels:
+- Level 1: Expense
+- Level 2: Expense.Food
+- Level 3: Expense.Food.Restaurant
+
+Rows may be filtered by level (e.g. "2,3").
+
+Major Level:
+- The first level whose filtered data contains more than one distinct item.
+- This level determines the primary assignment dimension of the chart.
+
+Minor Level:
+- A deeper level than the major level, if present and not filtered out.
+
+Levels Left After Charting:
+- Let n = number of levels with more than one item
+- n = 1 -> major level only
+- n = 2 -> major + minor
+- n > 2 -> the two deepest levels are used
+
+### 3.2 Time Structure
+
+Three independent notions exist:
+
+Literal Period (period):
+- Exact string from source data (e.g. 2023, 2025-Q3, 2025-07).
+
+Canonical Year (sort_year):
+- Integer year extracted by the server.
+
+Canonical Period Index (sort_period):
+- Integer ordering index used for correct chronology:
+  - Annual: 1
+  - Quarterly: 1..4
+  - Monthly: 1..12
+
+Time categories:
+- Y1 / Ym -> one or multiple years
+- P1 / Pm -> one or multiple periods
+
+### 3.3 Sign Behavior
 
 When chart data is computed:
 
-- If **all values ≥ 0**, plot normally.  
-- If **all values ≤ 0**, plot using **absolute value**.  
-- If **mixed-sign**, behavior depends on chart type. 
+- All values >= 0 -> plotted normally
+- All values <= 0 -> plotted using absolute values
+- Mixed-sign behavior depends on chart type
 
-### Mixed-sign rules:
-- Bar charts → positive and negative data appear above and below a zero line 
-- Pie and stack area charts → negative values are ignored  (removed from chart data)
+Mixed-sign rules:
+- Bar charts -> positive above zero, negative below
+- Pie charts -> negative values removed
+- Stacked area charts -> negative values removed
 
-# 3. Chart Eligibility Overview
+----------------------------------------------------------------
 
-The system supports **three chart types**, each with variants:
+## 4. Chart Types
 
-1. **Pie Chart**  
-2. **Bar Chart**  
-   - Simple bars  
-   - Stacked bars  
-3. **Stacked Area Chart**
+Supported chart types:
 
-# 4. Pie Charts
+1. Pie Chart
+2. Bar Chart
+   - Simple bars
+   - Stacked bars
+3. Stacked Area Chart
 
-## 4.1 Pie Slices
+----------------------------------------------------------------
 
-Pie charts are intended to show the relative composition
-of assignments. 
-- The amount for each assignment determines
-the size of each pie slice.  
-- Minor levels are ignored
+## 5. Chart Element Data (chart_element)
 
-## 4.2 Time Periods
+Purpose:
+- chart_element is the authoritative, fully computed description of what will be drawn.
+- It is a pandas DataFrame and is renderer-ready.
 
-It is not possible to show time evolution with a pie chart.
-If multiple period are present, separate charts are display
-for each time period.
+Row Semantics:
+- Each row represents one drawable element at one x-axis position within one figure.
 
-# 5. Bar Charts
+chart_index (authoritative):
+- Canonical figure identifier
+- All rows with the same chart_index belong to exactly one figure
+- Rows with different chart_index values must never be combined
+- Figures are rendered in data order of first appearance
+- chart_index has no temporal meaning
 
-Two types:
+Irregularity Rule:
+- All irregular, data-dependent, order-sensitive entities live in chart_element.
 
-- **Simple Bar Chart** (no minor levels)  
-- **Stacked Bar Chart** (minor level present)
+Examples of irregular entities that must be in chart_element:
+- bars, slices, stacked areas
+- per-element labels
+- per-element colors
+- per-element percentages
+- missing or sparse categories
+- irregular x-values
 
-Bar charts are **very flexible** and support:
+If something is irregular and not a singleton, it must be a row in chart_element.
 
-- Mixed signs  
-- Multi-year (clusters)  
-- Multi-period (chart rows)  
-- Multi-assignment  
-- Minor assignments (stacking)
+Geometry and Metrics:
+- values   -> exact geometry used for drawing
+- percent  -> precomputed upstream; renderer never computes percentages
+- count, amount, mag, threshold -> informational only
 
-## 5.1 Axis Roles
+Color:
+- color is a color index assigned upstream
+- Color sequencing follows data order
+- Renderers never infer or cycle colors
 
-### Bar axis:
-- No axis labels per se
-- Meaning of each bar is determined by ordering and labels
-- The bar label always contains the assignment (e.g. Expense)
-- The bar label **may** contain the period (e.g. Expense 2025 or Expense.Food 2025-01)
-- Bar grouping is optimized in the source data for comparison (e.g. Bars)
-with the same assignment and different years appear adjacent
-to one another (e.g. Income 2025, Income 2026).
-- When the duration is quarterly or monthly, the source
-data is grouped by (Month/Quarter, Assignment, Year).
+Ordering Invariant (global):
+- All visual ordering derives strictly from DataFrame row order. Always.
 
-### Amount axis:
-- Always vertical (y) for vertical bars 
-- Always horizontal (x) for horizontal vars
-- Zero is centered up/down (vertical) or left/right (horizontal) if mixed-sign
+This applies to:
+- x-axis progression
+- stacking order
+- legend order
+- color order
+- annotation order
 
-# 6. Stacked Area Charts
+----------------------------------------------------------------
 
-- Only rows for major level is processed; the minor level (if present) is ignored
-- x-axis = chronological period(s)  
-- y-axis = amount value (or absolute if negative-only)  
-- Each distinct assignment value is a stacked layer
-- Chart areas are rendered from the bottom up *i.e.* the first (largest) chart
-row is rendered at the bottom and the next rows are layered on top.
-- Default y-values are **integrals across time**, but raw series may be another mode  
+## 6. Figure Specification Data (figure_data)
 
-# 7. Labeling Rules
+Purpose:
+- figure_data describes how each figure is rendered, not what data exists.
+- It contains only singletons and regular (rule-based) layout instructions.
 
-## Shortest Unique Trailing Fragment
-Given assignments:
+Structure:
+- figure_data is a dictionary keyed by chart_index:
 
-    Expense.Food.Restaurant
-    Expense.Food.Fast
-    Expense.Services.HVAC
+    {
+      chart_index: {
+        key: value,
+        key: value,
+        ...
+      }
+    }
 
-We extract trailing components:
+Values are JSON-safe scalars or lists and may be returned directly from an API route.
 
-    Restaurant → unique
-    Fast → unique
-    HVAC → unique
+What figure_data may contain:
 
-If conflict arises, extend leftward:
+Singletons:
+- chart_type
+- title / subtitle
+- legend visibility and title
+- palette name
+- order policy (data_order)
 
-    a.c → c  
-    a.d → d  
-    a.c.x → “a.x” (because “x” alone not unique)
+Regular rules:
+- axis bindings (which column is x, y, stack, legend)
+- tick spacing rules
+- label formatting
+- label orientation
+- stacking rules
+- grid rules
 
-Labels evaluated separately for:
+What figure_data must not contain:
+- irregular lists
+- per-element data
+- computed metrics
+- renderer heuristics
 
-- Bar-level assignment labels  
-- Stack-level labels (minor level)  
-- Pie slice labels  
+Rule:
+- If something is irregular and not a singleton, it is illegal in figure_data.
 
-# 8. Ordering Rules
+----------------------------------------------------------------
 
-- Initial row order is computed for assignment data
-- Computation of chart data from assignment data may do further
-sorting by chart index (multiple charts) but will otherwise preserve
-the ordering of source data
-- Rendering will **never** change the sort order i.e. the order
-of chart elements (bar, pie slice, area, etc.) is identical to
-the order of rows in the chart data.
+## 7. Axis and Tick Model
+
+No Implicit Axes:
+- No column has implicit axis meaning.
+- Axis roles are explicitly declared in figure_data.
+
+Time Axes:
+- Time tick spacing is always regular.
+- Supported units: year, quarter, month.
+- Ticks are specified by rules, not lists.
+
+Major Ticks:
+- Defined by regular rules
+- All major ticks are labeled by default
+- Figure specifies:
+  - label format
+  - label orientation (horizontal or vertical), or rotation
+
+Minor Ticks:
+- Defined by regular rules
+- Never labeled by default
+- Exist only if explicitly specified
+
+Explicit Rule:
+- Ticks (major or minor) exist only if specified.
+- No inference. No automatic "nice" behavior.
+
+----------------------------------------------------------------
+
+## 8. Chart-Type-Specific Notes
+
+### 8.1 Pie Charts
+- Show relative composition of assignments.
+- Minor levels ignored.
+- Multiple periods produce multiple charts (no time evolution within a single pie).
+
+### 8.2 Bar Charts
+- Support mixed signs.
+- Support multiple years and periods.
+- Support stacked minor levels.
+- Axis orientation determined by chart configuration.
+- Zero line centered if mixed-sign.
+
+### 8.3 Stacked Area Charts
+- Operate on major level only; minor level ignored.
+- x-axis is chronological (as bound in figure_data).
+- y-axis is value (absolute if negative-only).
+- Areas rendered bottom-up in data order.
+
+----------------------------------------------------------------
+
+## 9. Renderer Contract
+
+The renderer:
+- Consumes:
+  - chart_element (DataFrame)
+  - figure_data (dictionary)
+- Performs:
+  - no computation
+  - no inference
+  - no sorting or reordering
+- Produces pixels only
+
+----------------------------------------------------------------
+
+## 10. Design Doctrine (Summary)
+
+- chart_element owns all irregularity
+- figure_data owns only singletons and regular rules
+- chart_index defines figures
+- Data order is law
+- Percentages are precomputed
+- Renderers are dumb
+
+This separation is intentional and enforced.
 
 # End of README
