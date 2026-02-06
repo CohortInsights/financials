@@ -78,7 +78,7 @@ def render_pies(chart_elements: pd.DataFrame,
         return size
 
     title_font_size = scale_font(0.03,14,24)
-    label_font_size = scale_font(0.02,12,16)
+    label_font_size = scale_font(0.02,9,12)
 
     # ---- Canonical grid extents ----
     year_rows   = figure_data["grid_year"].max() + 1

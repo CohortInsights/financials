@@ -151,28 +151,34 @@ def add_values_column(chart_data: DataFrame, chart_type: str, cfg: dict) -> Data
 
 def add_ignore_column(chart_data: DataFrame, chart_type: str) -> DataFrame:
     """
-    Mark rows whose absolute value falls below their threshold.
+    Mark rows whose label is insignificant across ALL charts.
 
-    Adds a column:
-    - ignore = 1 if abs(values) < threshold
-    - ignore = 0 otherwise
+    Rules:
+    - A label is ignored (ignore = 1) ONLY IF it is below threshold in every group
+    - If a label exceeds threshold in ANY group, it is kept everywhere
 
-    Grouping is performed by (chart_index, level) to respect chart semantics.
+    Grouping is performed by (label, level) to respect chart semantics.
     """
-    # Initialize column to default (not dropped)
-    chart_data["ignore"] = 0
 
-    for (_, _), idx in chart_data.groupby(
-        ["chart_index", "level"], sort=False
-    ).groups.items():
+    # Per-row significance
+    abs_values = chart_data["amount"].abs()
+    significant = abs_values >= chart_data["threshold"]
 
-        values = chart_data.loc[idx, "amount"]
-        thresh = chart_data.loc[idx, "threshold"]
+    # Determine if each (label, level) is ever significant
+    label_significant = (
+        significant
+        .groupby([chart_data["label"], chart_data["level"]])
+        .any()
+    )
 
-        abs_values = values.abs()
-
-        # Mark rows below threshold
-        chart_data.loc[idx, "ignore"] = (abs_values < thresh).astype(int)
+    # Broadcast back to rows
+    chart_data["ignore"] = (
+        ~chart_data
+        .set_index(["label", "level"])
+        .index
+        .map(label_significant)
+        .values
+    ).astype(int)
 
     return chart_data
 
