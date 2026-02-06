@@ -36,12 +36,57 @@ palettes = {
         "#ff9896",
         "#c5b0d5",
         "#c49c94"
+    ],
+    32: [
+        # Strong primaries, alternating warm/cool
+        "#1f77b4",  # blue
+        "#ff7f0e",  # orange
+        "#2ca02c",  # green
+        "#d62728",  # red
+        "#9467bd",  # purple
+        "#8c564b",  # brown
+        "#17becf",  # cyan
+        "#e377c2",  # pink
+
+        # Muted / neutral breakers
+        "#7f7f7f",  # gray
+        "#bcbd22",  # olive
+
+        # Light companions, again alternating hue
+        "#aec7e8",  # light blue
+        "#ffbb78",  # light orange
+        "#98df8a",  # light green
+        "#ff9896",  # light red
+        "#c5b0d5",  # light purple
+        "#c49c94",  # light brown
+
+        # Dark companions, spaced far apart
+        "#1a5f8a",  # dark blue
+        "#cc660b",  # dark orange
+        "#207a3a",  # dark green
+        "#a61e22",  # dark red
+        "#6f4fa0",  # dark purple
+        "#6b4235",  # dark brown
+
+        # Remaining contrast fillers
+        "#128c8c",  # dark cyan
+        "#b85c9e",  # dark pink
+        "#5f5f5f",  # dark gray
+        "#8f9019",  # dark olive
+        "#89aed6",  # pale blue
+        "#d99a5e",  # muted orange
+        "#78b87a",  # muted green
+        "#a07f72"   # muted brown
     ]
 }
 
 def get_color_palette(n_colors: int) -> list:
+    """
+    Get smallest pallette(4,5,16) that will have at least n_colors
+    :param n_colors: Minimum size of palette
+    :return:    Palette suitable for n_colors
+    """
     size = 4
-
     while size < n_colors:
         size *= 2
         if size not in palettes:
