@@ -14,7 +14,7 @@ from financials.chart.chart_common import (
     figure_to_bytes
 )
 
-from financials.chart.chart_render import render_pies
+from financials.chart.chart_render import render_pies, render_bars
 
 def compute_chart_data(args: dict) -> DataFrame:
     chart_type = args.get("chart")
@@ -122,6 +122,11 @@ def api_chart_render():
 
         if "pie" in chart_type:
             figure = render_pies(
+                chart_elements=chart_elements,
+                figure_data=fig_data
+            )
+        elif "bar" in chart_type:
+            figure = render_bars(
                 chart_elements=chart_elements,
                 figure_data=fig_data
             )

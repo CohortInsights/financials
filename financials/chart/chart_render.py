@@ -1,5 +1,6 @@
 import matplotlib.pyplot as plt
 import pandas as pd
+import numpy as np
 
 palettes = {
     4: [
@@ -174,6 +175,170 @@ def render_pies(chart_elements: pd.DataFrame,
             fig_row["title"],
             fontsize=title_font_size,
             y=0.93,
+            pad=0,
+        )
+
+    return fig
+
+def render_bars(chart_elements: pd.DataFrame,
+                figure_data: pd.DataFrame):
+    """
+    Deterministic bar chart renderer.
+
+    - One composite Figure
+    - One bar chart per fig_index / chart_index
+    - Fully independent axes (no subplot grid)
+    - All layout derived explicitly from figure_data
+    - Axis identity comes from chart_elements['label']
+    - time_col rendered inside bars
+    - Fixed category-label margin based on orientation
+    """
+
+    # ---- Figure geometry (authoritative singletons) ----
+    frame_width  = figure_data.iloc[0]["frame_width"]
+    frame_height = figure_data.iloc[0]["frame_height"]
+    dpi          = figure_data.iloc[0]["dpi"]
+
+    unit = figure_data.iloc[0]["currency_unit"]
+    is_percent = "percent" in unit
+
+    def scale_font(scaling, low, high):
+        size = int(max(frame_width, frame_height) * scaling)
+        if size < low:
+            return low
+        if size > high:
+            return high
+        return size
+
+    title_font_size = scale_font(0.0175, 14, 24)
+    label_font_size = scale_font(0.01, 9, 12)
+
+    # ---- Grid extents ----
+    if "grid_year" in figure_data.columns and "grid_period" in figure_data.columns:
+        year_rows   = figure_data["grid_year"].max() + 1
+        period_cols = figure_data["grid_period"].max() + 1
+
+        if year_rows <= period_cols:
+            row_field = "grid_year"
+            col_field = "grid_period"
+            n_rows = year_rows
+            n_cols = period_cols
+        else:
+            row_field = "grid_period"
+            col_field = "grid_year"
+            n_rows = period_cols
+            n_cols = year_rows
+    else:
+        row_field = None
+        col_field = None
+        n_rows = 1
+        n_cols = 1
+
+    # ---- Composite figure size ----
+    fig_width_px  = n_cols * frame_width
+    fig_height_px = n_rows * frame_height
+
+    fig = plt.figure(
+        figsize=(fig_width_px / dpi, fig_height_px / dpi),
+        dpi=dpi,
+    )
+
+    # ---- Color palette (authoritative indices) ----
+    color_count = chart_elements["color"].max()
+    palette = get_color_palette(color_count)
+
+    # ---- Normalized tile size ----
+    tile_w = frame_width / fig_width_px
+    tile_h = frame_height / fig_height_px
+    pad = 0.1
+
+    # ---- Fixed category-label margin (deterministic) ----
+    category_margin_frac = 0.15
+
+    # ---- Render each bar chart independently ----
+    for _, fig_row in figure_data.iterrows():
+
+        chart_index = fig_row["fig_index"]
+
+        df = chart_elements[chart_elements["chart_index"] == chart_index]
+
+        data_col    = fig_row["currency_col"]
+        time_col    = fig_row["time_col"]
+        orientation = fig_row["orientation"]
+
+        values     = df[data_col].values
+        categories = df["label"].values
+        periods    = df[time_col].values
+
+        color_idx = df["color"].values - 1
+        colors = [palette[i] for i in color_idx]
+
+        if row_field is not None:
+            row = fig_row[row_field]
+            col = fig_row[col_field]
+        else:
+            row = 0
+            col = 0
+
+        # ---- Orientation-aware axes placement ----
+        if orientation == "horizontal":
+            left   = col * tile_w + pad + category_margin_frac * tile_w
+            width  = tile_w * (1.0 - category_margin_frac) - 2 * pad
+            bottom = 1.0 - (row + 1) * tile_h + pad
+            height = tile_h - 1.5 * pad
+        else:
+            left   = col * tile_w + pad
+            width  = tile_w - 2 * pad
+            bottom = 1.0 - (row + 1) * tile_h + pad + category_margin_frac * tile_h
+            height = tile_h * (1.0 - category_margin_frac) - 2 * pad
+
+        ax = fig.add_axes([left, bottom, width, height])
+
+        positions = np.arange(len(categories))
+
+        # ---- Bar geometry + labeling ----
+        if orientation == "horizontal":
+            ax.barh(positions, values, color=colors)
+
+            ax.set_yticks(positions)
+            ax.set_yticklabels(categories, fontsize=label_font_size)
+            ax.invert_yaxis()
+
+            for i, v in enumerate(values):
+                x = v * 0.05 if v >= 0 else v * 0.95
+                ha = "left" if v >= 0 else "right"
+                ax.text(
+                    x, i, str(periods[i]),
+                    va="center",
+                    ha=ha,
+                    fontsize=label_font_size,
+                    color="white",
+                    clip_on=True,
+                )
+        else:
+            ax.bar(positions, values, color=colors)
+
+            ax.set_xticks(positions)
+            ax.set_xticklabels(categories, fontsize=label_font_size)
+
+            for i, v in enumerate(values):
+                y = v * 0.95 if v >= 0 else v * 0.05
+                va = "top" if v >= 0 else "bottom"
+                ax.text(
+                    i, y, str(periods[i]),
+                    ha="center",
+                    va=va,
+                    fontsize=label_font_size,
+                    color="white",
+                    clip_on=True,
+                )
+
+        ax.tick_params(axis="both", which="both", length=0)
+
+        ax.set_title(
+            fig_row["title"],
+            fontsize=title_font_size,
+            y=0.95,
             pad=0,
         )
 
