@@ -282,7 +282,7 @@ def add_stats_columns(chart_data: DataFrame, chart_type: str, cfg: dict) -> Data
 
         mag = abs_values.sum()
         max_val = abs_values.max()
-        threshold = max_val * min_frac
+        threshold = mag * min_frac
 
         if mag > 0:
             percent = (abs_values * 100.0 / mag).round(1)
@@ -296,29 +296,31 @@ def add_stats_columns(chart_data: DataFrame, chart_type: str, cfg: dict) -> Data
 
     return chart_data
 
-def add_color_column(chart_data : DataFrame, chart_type : str, cfg : dict) -> DataFrame:
+from pandas import factorize
+import pandas as pd
+
+def add_color_column(chart_data: DataFrame, chart_type: str, cfg: dict) -> DataFrame:
     """
-    Assign a color index column to each chart element. This does not choose the color itself but
-    rather which colors are the *same* across time periods and assignments
-    :param chart_data:
-    :param chart_type:
-    :param cfg:
-    :return:
+    Assign a color index column to each chart element.
+    - Same key (typically label) => same color index
+    - Indices assigned in order of first encounter in the DataFrame
     """
-    # By default, a color is assigned per assignment across time periods within the same chart
-    color_keys = ["assignment"]
+    color_keys = ["label"]
     chart_data["color"] = 0
 
     if "bar" in chart_type:
         n_years = chart_data["sort_year"].nunique()
         if n_years > 1:
-            # For multiple years, we emphasize comparison by year
             color_keys = ["sort_year"]
 
-    # Assign color by color_keys. Reset to 1 at chart index boundaries
-    for chart_index, idx in chart_data.groupby("chart_index", sort=False).groups.items():
-        keys = chart_data.loc[idx, color_keys].apply(tuple, axis=1)
-        chart_data.loc[idx, "color"] = (factorize(keys)[0] + 1).astype(int)
+    # Build a single key per row (tuple when multiple keys)
+    if len(color_keys) == 1:
+        keys = chart_data[color_keys[0]]
+    else:
+        keys = chart_data[color_keys].astype(object).apply(tuple, axis=1)
+
+    # factorize preserves first-seen order by default (sort=False)
+    chart_data["color"] = (pd.factorize(keys, sort=False)[0] + 1).astype(int)
 
     return chart_data
 
@@ -336,8 +338,8 @@ def add_frame_dimensions(fig_data : DataFrame, chart_type : str) -> DataFrame:
 
     bar_element_size = 25
     area_element_size = 300
-    pie_slice_size = 60
-    fixed_frame_size = 600
+    pie_slice_size = 75
+    fixed_frame_size = 750
 
     n_frames = len(fig_data)
     for index in fig_indexes:

@@ -58,6 +58,7 @@ def render_pies(chart_elements: pd.DataFrame,
     - One pie per fig_index / chart_index
     - Fully independent axes (no subplot grid)
     - All layout derived explicitly from figure_data
+    - Grid auto-swaps so larger dimension runs horizontally
     - No inference, no sorting, no scaling heuristics
     """
 
@@ -65,12 +66,39 @@ def render_pies(chart_elements: pd.DataFrame,
     frame_width  = figure_data.iloc[0]["frame_width"]
     frame_height = figure_data.iloc[0]["frame_height"]
     dpi          = figure_data.iloc[0]["dpi"]
-    title_font_size = int(frame_height * 0.03)
-    label_font_size = int(frame_height * 0.02)
+    unit = figure_data.iloc[0]["currency_unit"]
+    is_percent = "percent" in unit
 
-    n_rows = figure_data["grid_year"].max() + 1
-    n_cols = figure_data["grid_period"].max() + 1
+    def scale_font(scaling, low, high):
+        size = int(max(frame_width,frame_height) * scaling)
+        if size < low:
+            return low
+        if size > high:
+            return high
+        return size
 
+    title_font_size = scale_font(0.03,14,24)
+    label_font_size = scale_font(0.02,12,16)
+
+    # ---- Canonical grid extents ----
+    year_rows   = figure_data["grid_year"].max() + 1
+    period_cols = figure_data["grid_period"].max() + 1
+
+    # ---- Auto-orient grid so larger dimension runs horizontally ----
+    if year_rows <= period_cols:
+        # Default: years vertical, periods horizontal
+        row_field = "grid_year"
+        col_field = "grid_period"
+        n_rows = year_rows
+        n_cols = period_cols
+    else:
+        # Swap: periods vertical, years horizontal
+        row_field = "grid_period"
+        col_field = "grid_year"
+        n_rows = period_cols
+        n_cols = year_rows
+
+    # ---- Composite figure size ----
     fig_width_px  = n_cols * frame_width
     fig_height_px = n_rows * frame_height
 
@@ -88,7 +116,7 @@ def render_pies(chart_elements: pd.DataFrame,
     tile_h = frame_height / fig_height_px
 
     # Small deterministic padding inside each tile
-    pad = 0  # normalized figure units
+    pad = 0.0  # normalized figure units
 
     # ---- Render each pie independently ----
     for _, fig_row in figure_data.iterrows():
@@ -102,14 +130,21 @@ def render_pies(chart_elements: pd.DataFrame,
         data_col = fig_row["currency_col"]
         values = df[data_col].values
         labels = df["label"].values
+        label_list = []
+        n_labels = len(labels)
+        for index in range(n_labels):
+            new_label = labels[index] + "\n" + str(values[index])
+            if is_percent:
+                new_label += '%'
+            label_list.append(new_label)
 
         # Convert 1-based color indices → 0-based
         color_idx = df["color"].values - 1
         colors = [palette[i] for i in color_idx]
 
-        # ---- Explicit axes placement (fully independent) ----
-        col = fig_row["grid_period"]
-        row = fig_row["grid_year"]
+        # ---- Explicit axes placement (closed universe) ----
+        row = fig_row[row_field]
+        col = fig_row[col_field]
 
         left   = col * tile_w + pad
         bottom = 1.0 - (row + 1) * tile_h + pad
@@ -122,10 +157,10 @@ def render_pies(chart_elements: pd.DataFrame,
         ax.pie(
             values,
             colors=colors,
-            labels=labels,
-            labeldistance=0.70,  # pull labels inward
+            labels=label_list,
+            labeldistance=0.70,
             textprops={
-                "fontsize": 8,
+                "fontsize": label_font_size,
                 "ha": "center",
                 "va": "center",
             },
