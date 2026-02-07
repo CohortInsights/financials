@@ -35,7 +35,7 @@ def compute_chart_data(args: dict) -> DataFrame:
         raise ChartDataError("compute_assignments did not return DataFrame")
 
     cfg = {
-        "min_frac": 0.05
+        "min_frac": 0.03
     }
 
     chart_data: DataFrame = compute_chart_elements(

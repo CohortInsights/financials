@@ -105,9 +105,41 @@ def add_cluster_indexes(chart_data: DataFrame, chart_type: str) -> DataFrame:
     # Aassign cluster id based on first encountered groups
     keys = chart_data[group_columns].apply(tuple, axis=1)
     chart_data["cluster"] = factorize(keys)[0] + 1
-
     return chart_data
 
+
+def add_element_pos_column(chart_data : DataFrame):
+    """
+    Adds a column that uses the time_pos and cluster_index to compute an element position column (used only for bars right now)
+    :param chart_data:
+    :return:
+    """
+    space_between_clusters = 0.625
+    time_pos = chart_data["time_pos"].values
+    # Cluster index needs to be indexed starting at zero so we subtract 1
+    # time_pos is already zero indexed
+    cluster_index = chart_data["cluster"].values - 1
+    n_time_points = chart_data["time_pos"].nunique()
+    chart_data['elem_pos'] = time_pos + (n_time_points + space_between_clusters) * cluster_index
+    return chart_data
+
+
+def add_time_pos_column(chart_data: DataFrame, chart_type : str):
+    """
+    Adds an index 0,1,2 that encodes the chronological time sequence. Accounts for time gaps between adjacent periods
+    :param chart_data: Assignment data containing "sort_year" and "sort_period" columns
+    :param chart_type:
+    :return: DataFrame populated with the "time_pos" column
+    """
+    # Initialize to integer
+    sort_years = chart_data["sort_year"].values
+    sort_periods = chart_data["sort_period"].unique()
+
+    start_year = sort_years.min()
+    count_values = len(sort_periods)
+
+    chart_data["time_pos"] = (sort_years - start_year) * count_values + sort_periods
+    return chart_data
 
 def add_values_column(chart_data: DataFrame, chart_type: str, cfg: dict) -> DataFrame:
     """
@@ -508,6 +540,9 @@ def compute_chart_elements(source_data : DataFrame, chart_type : str, cfg : dict
     add_stats_columns(chart_data, chart_type, cfg)
     add_ignore_column(chart_data, cfg)
     add_values_column(chart_data,chart_type, cfg)
+    add_time_pos_column(chart_data, cfg)
+    if chart_type == "bar":
+        add_element_pos_column(chart_data)
     merge_ignore_rows_into_other(chart_data, cfg)
     add_color_column(chart_data, chart_type, cfg)
     # ----- End Adding Element Columns

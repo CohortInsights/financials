@@ -246,11 +246,22 @@ def render_bars(chart_elements: pd.DataFrame,
     frame_width  = figure_data.iloc[0]["frame_width"]
     frame_height = figure_data.iloc[0]["frame_height"]
     orientation = figure_data.iloc[0]["orientation"]
-    orientation = "vertical"
     dpi          = figure_data.iloc[0]["dpi"]
+    cluster_labels, cluster_centers = None, None
+    has_clusters = (
+            ("cluster" in chart_elements.columns)
+            and (chart_elements["cluster"].nunique() > 1)
+    )
+    if has_clusters:
+        cluster_centers = (
+            chart_elements.groupby("cluster")["elem_pos"].mean()
+        )
+        cluster_labels = (
+            chart_elements.groupby("cluster")["label"].first()
+        )
 
-    title_font_size = 11
-    label_font_size = 7
+    title_font_size = 10
+    label_font_size = 6
 
     # ---- Grid extents ----
     if "grid_year" in figure_data.columns and "grid_period" in figure_data.columns:
@@ -285,11 +296,6 @@ def render_bars(chart_elements: pd.DataFrame,
     # ---- Color palette (authoritative indices) ----
     color_count = chart_elements["color"].max()
     palette = get_color_palette(color_count)
-
-    # ---- Normalized tile size ----
-    tile_w = frame_width / fig_width_px
-    tile_h = frame_height / fig_height_px
-    pad = 0.125
 
     # ---- Render each bar chart independently ----
     for _, fig_row in figure_data.iterrows():
@@ -331,15 +337,19 @@ def render_bars(chart_elements: pd.DataFrame,
         ax.tick_params(labelsize=label_font_size)
 
         # Construct index 0... number of bars - 1
-        positions = np.arange(len(outside_bar_labels))
+        positions = chart_elements["elem_pos"]
 
         # ---- Bar geometry + labeling ----
         if orientation == "horizontal":
             ax.barh(positions, values, color=colors)
             ax.xaxis.set_major_formatter(StrMethodFormatter(currency_format))
 
-            ax.set_yticks(positions)
-            ax.set_yticklabels(outside_bar_labels, fontsize=label_font_size)
+            if has_clusters:
+                ax.set_yticks(cluster_centers.values)
+                ax.set_yticklabels(cluster_labels.values, fontsize=label_font_size)
+            else:
+                ax.set_yticks(positions)
+                ax.set_yticklabels(outside_bar_labels, fontsize=label_font_size)
             ax.invert_yaxis()
         else:
             ax.bar(positions, values, color=colors, align="center")
