@@ -1,4 +1,6 @@
 import matplotlib.pyplot as plt
+from matplotlib.ticker import StrMethodFormatter
+
 import pandas as pd
 import numpy as np
 
@@ -225,8 +227,9 @@ def render_pies(chart_elements: pd.DataFrame,
 
     return fig
 
+
 def render_bars(chart_elements: pd.DataFrame,
-                figure_data: pd.DataFrame):
+                figure_data: pd.DataFrame) -> plt.figure:
     """
     Deterministic bar chart renderer.
 
@@ -242,21 +245,12 @@ def render_bars(chart_elements: pd.DataFrame,
     # ---- Figure geometry (authoritative singletons) ----
     frame_width  = figure_data.iloc[0]["frame_width"]
     frame_height = figure_data.iloc[0]["frame_height"]
+    orientation = figure_data.iloc[0]["orientation"]
+    orientation = "vertical"
     dpi          = figure_data.iloc[0]["dpi"]
 
-    unit = figure_data.iloc[0]["currency_unit"]
-    is_percent = "percent" in unit
-
-    def scale_font(scaling, low, high):
-        size = int(max(frame_width, frame_height) * scaling)
-        if size < low:
-            return low
-        if size > high:
-            return high
-        return size
-
-    title_font_size = scale_font(0.0175, 14, 24)
-    label_font_size = scale_font(0.01, 9, 12)
+    title_font_size = 11
+    label_font_size = 7
 
     # ---- Grid extents ----
     if "grid_year" in figure_data.columns and "grid_period" in figure_data.columns:
@@ -295,25 +289,21 @@ def render_bars(chart_elements: pd.DataFrame,
     # ---- Normalized tile size ----
     tile_w = frame_width / fig_width_px
     tile_h = frame_height / fig_height_px
-    pad = 0.1
-
-    # ---- Fixed category-label margin (deterministic) ----
-    category_margin_frac = 0.15
+    pad = 0.125
 
     # ---- Render each bar chart independently ----
     for _, fig_row in figure_data.iterrows():
 
         chart_index = fig_row["fig_index"]
-
+        # Extract a new DataFrame one chart at a time
         df = chart_elements[chart_elements["chart_index"] == chart_index]
 
         data_col    = fig_row["currency_col"]
         time_col    = fig_row["time_col"]
-        orientation = fig_row["orientation"]
+        currency_format = fig_row["currency_format"]
 
         values     = df[data_col].values
-        categories = df["label"].values
-        periods    = df[time_col].values
+        outside_bar_labels = df["label"].values
 
         color_idx = df["color"].values - 1
         colors = [palette[i] for i in color_idx]
@@ -327,63 +317,46 @@ def render_bars(chart_elements: pd.DataFrame,
 
         # ---- Orientation-aware axes placement ----
         if orientation == "horizontal":
-            left   = col * tile_w + pad + category_margin_frac * tile_w
-            width  = tile_w * (1.0 - category_margin_frac) - 2 * pad
-            bottom = 1.0 - (row + 1) * tile_h + pad
-            height = tile_h - 1.5 * pad
+            left   = 0.2
+            width  = 0.75
+            bottom = 0.1
+            height = 0.80
         else:
-            left   = col * tile_w + pad
-            width  = tile_w - 2 * pad
-            bottom = 1.0 - (row + 1) * tile_h + pad + category_margin_frac * tile_h
-            height = tile_h * (1.0 - category_margin_frac) - 2 * pad
+            left   = 0.1
+            width  = 0.80
+            bottom = 0.225
+            height = 0.70
 
         ax = fig.add_axes([left, bottom, width, height])
+        ax.tick_params(labelsize=label_font_size)
 
-        positions = np.arange(len(categories))
+        # Construct index 0... number of bars - 1
+        positions = np.arange(len(outside_bar_labels))
 
         # ---- Bar geometry + labeling ----
         if orientation == "horizontal":
             ax.barh(positions, values, color=colors)
+            ax.xaxis.set_major_formatter(StrMethodFormatter(currency_format))
 
             ax.set_yticks(positions)
-            ax.set_yticklabels(categories, fontsize=label_font_size)
+            ax.set_yticklabels(outside_bar_labels, fontsize=label_font_size)
             ax.invert_yaxis()
-
-            for i, v in enumerate(values):
-                x = v * 0.05 if v >= 0 else v * 0.95
-                ha = "left" if v >= 0 else "right"
-                ax.text(
-                    x, i, str(periods[i]),
-                    va="center",
-                    ha=ha,
-                    fontsize=label_font_size,
-                    color="white",
-                    clip_on=True,
-                )
         else:
-            ax.bar(positions, values, color=colors)
+            ax.bar(positions, values, color=colors, align="center")
+            ax.yaxis.set_major_formatter(StrMethodFormatter(currency_format))
 
             ax.set_xticks(positions)
-            ax.set_xticklabels(categories, fontsize=label_font_size)
+            ax.set_xticklabels(outside_bar_labels,
+                               fontsize=label_font_size,
+                               rotation=90)
 
-            for i, v in enumerate(values):
-                y = v * 0.95 if v >= 0 else v * 0.05
-                va = "top" if v >= 0 else "bottom"
-                ax.text(
-                    i, y, str(periods[i]),
-                    ha="center",
-                    va=va,
-                    fontsize=label_font_size,
-                    color="white",
-                    clip_on=True,
-                )
-
+        # Further decoarations
         ax.tick_params(axis="both", which="both", length=0)
 
         ax.set_title(
             fig_row["title"],
             fontsize=title_font_size,
-            y=0.95,
+            y=1.05,
             pad=0,
         )
 

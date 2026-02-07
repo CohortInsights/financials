@@ -8,10 +8,9 @@ global_chart_types: dict = {
     "stacked_area": "evolution of assignment amounts over time, with areas stacked on top of each other to show both individual trends and the total, cumulative trend"
 }
 
-bar_element_size = 25   # Thickness of any bar in a bar chart
+bar_element_size = 40   # Thickness of any bar in a bar chart
 area_element_size = 300 # Number of areas * this number equals height of stacked area plot
 pie_slice_size = 75     # Number of slices * this number equals size of square pie area
-fixed_frame_size = 750  # Width for a single horizontal plot, Height for a single vertical plot
 min_frame_size = 600  # No dimension should be shorter than this size
 
 
@@ -355,15 +354,15 @@ def add_frame_dimensions(fig_data : DataFrame, chart_type : str) -> DataFrame:
         n_elements = n_elements_array[idx]
         n_time_points = n_time_points_array[idx]
         if 'area' in chart_type:
-            frame_width = fixed_frame_size
+            frame_width = min_frame_size
             frame_height = n_elements * area_element_size
         elif 'bar' in chart_type:
             orient = orientations[idx]
             if orient == "horizontal":
                 frame_height = n_elements * bar_element_size
-                frame_width = fixed_frame_size
+                frame_width = min_frame_size
             elif orient == "vertical":
-                frame_height = n_frames * fixed_frame_size
+                frame_height = n_frames * min_frame_size
                 frame_width = n_elements * bar_element_size
         elif 'pie' in chart_type:
             frame_width = n_elements * pie_slice_size
@@ -376,6 +375,14 @@ def add_frame_dimensions(fig_data : DataFrame, chart_type : str) -> DataFrame:
     # Apply min_frame_size constraint to both dimensions
     fig_data['frame_width'] = fig_data['frame_width'].clip(lower=min_frame_size)
     fig_data['frame_height'] = fig_data['frame_height'].clip(lower=min_frame_size)
+
+    # Now scale up to prevent aspect distortion
+    frame_width = fig_data['frame_width'].values[0]
+    frame_height = fig_data['frame_height'].values[0]
+    if (frame_width < frame_height):
+        fig_data['frame_width'] = fig_data['frame_width'].clip(lower=0.75 * frame_height)
+    elif ( frame_height < frame_width ):
+        fig_data['frame_height'] = fig_data['frame_height'].clip(lower=0.75 * frame_width)
 
     fig_data['dpi'] = 150
     return fig_data
@@ -433,7 +440,7 @@ def add_fig_title_axes(fig_data : DataFrame, elements : DataFrame, chart_type : 
                         "parent" in index_elements.columns
                         and (index_elements["parent"] > 0).any()
                 )
-            # orientation = "horizontal"
+            orientation = "horizontal"
         segmented_list.append(segmented)
         orientation_list.append(orientation)
         titles.append(t)
@@ -442,11 +449,11 @@ def add_fig_title_axes(fig_data : DataFrame, elements : DataFrame, chart_type : 
     fig_data['time_col'] = "period"
     fig_data['currency_col'] = "values"
     fig_data['currency_unit'] = "dollars"
-    fig_data['currency_format'] = "$ {value:,.0f}"
+    fig_data['currency_format'] = '${x:,.0f}'
     if 'scaled_values' in elements.columns:
         fig_data['currency_col'] = "scaled_values"
         fig_data['currency_unit'] = "dollars_thousands"
-        fig_data['currency_format'] = "$ {value:,.1f}K"
+        fig_data['currency_format'] = '${x:,.0f}K'
     orientation = orientation_list[0]
     if orientation == "horizontal":
         fig_data['x_axis'] = "currency"
