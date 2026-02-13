@@ -245,24 +245,26 @@ def render_bars(chart_elements: pd.DataFrame,
     # ---- Figure geometry (authoritative singletons) ----
     frame_width  = figure_data.iloc[0]["frame_width"]
     frame_height = figure_data.iloc[0]["frame_height"]
-    orientation = figure_data.iloc[0]["orientation"]
+    orientation = "vertical"
     dpi          = figure_data.iloc[0]["dpi"]
     cluster_labels, cluster_centers = None, None
-    has_clusters = (
-            ("cluster" in chart_elements.columns)
-            and (chart_elements["cluster"].nunique() > 1)
+    asn_index = "assignment_index"
+    has_assignment_clusters = (
+            (asn_index in chart_elements.columns)
+            and (chart_elements[asn_index].nunique() > 1)
     )
+    if has_assignment_clusters:
+        cluster_centers = (
+            chart_elements.groupby(asn_index)["elem_pos"].mean()
+        )
+        cluster_labels = (
+            chart_elements.groupby(asn_index)["label"].first()
+        )
+
     has_mutli_periods = (
             ("period" in chart_elements.columns)
             and (chart_elements["period"].nunique() > 1)
     )
-    if has_clusters:
-        cluster_centers = (
-            chart_elements.groupby("cluster")["elem_pos"].mean()
-        )
-        cluster_labels = (
-            chart_elements.groupby("cluster")["label"].first()
-        )
 
     title_font_size = 10
     major_label_font_size = 8
@@ -347,7 +349,7 @@ def render_bars(chart_elements: pd.DataFrame,
             ax.barh(positions, values, color=colors)
             ax.xaxis.set_major_formatter(StrMethodFormatter(currency_format))
 
-            if has_clusters:
+            if has_assignment_clusters:
                 ax.set_yticks(cluster_centers.values)
                 ax.set_yticklabels(cluster_labels.values, fontsize=major_label_font_size)
             else:
@@ -358,7 +360,7 @@ def render_bars(chart_elements: pd.DataFrame,
             ax.bar(positions, values, color=colors, align="center")
             ax.yaxis.set_major_formatter(StrMethodFormatter(currency_format))
 
-            if has_clusters:
+            if has_assignment_clusters:
                 ax.set_xticks(cluster_centers.values)
                 ax.set_xticklabels(cluster_labels.values, fontsize=major_label_font_size, rotation=90)
             else:
