@@ -34,8 +34,12 @@ def compute_chart_data(args: dict) -> DataFrame:
     if not isinstance(source_data, DataFrame):
         raise ChartDataError("compute_assignments did not return DataFrame")
 
+    min_frac = 0.010
+    if chart_type == "pie":
+        min_frac = 0.03
+
     cfg = {
-        "min_frac": 0.03
+        "min_frac": min_frac
     }
 
     chart_data: DataFrame = compute_chart_elements(

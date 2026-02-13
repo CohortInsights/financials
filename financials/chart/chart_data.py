@@ -11,7 +11,8 @@ global_chart_types: dict = {
 bar_element_size = 40   # Thickness of any bar in a bar chart
 area_element_size = 300 # Number of areas * this number equals height of stacked area plot
 pie_slice_size = 75     # Number of slices * this number equals size of square pie area
-min_frame_size = 600  # No dimension should be shorter than this size
+min_frame_size = 800  # No dimension should be shorter than this size
+bar_widths_between_clusters = 0.75  # Spacing in units of bars between clusters
 
 
 def get_char_types() -> dict:
@@ -86,41 +87,43 @@ def add_chart_indexes(chart_data: DataFrame, chart_type: str) -> DataFrame:
     return chart_data
 
 
-def add_cluster_indexes(chart_data: DataFrame, chart_type: str) -> DataFrame:
+def add_cluster_index_columns(chart_data: DataFrame, cluster_cols : list[str]):
     """
-    Adds the column that encodes a "cluster" of values used when rendering a chart type
-    :param chart_data: Filtered assignment data
-    :return: The input data after adding the 'cluster' column
+    Adds <cluster_col>_index columns (dense appearance-order rank)
+    per chart_index group.
     """
-    # By default we cluster elements within the same time chart and time period
-    group_columns = ["chart_index","period"]
-    # In bar charts we compare bars of the same assignment by clustering them across periods
-    if "bar" in chart_type:
-        group_columns = ["chart_index","assignment"]
 
-    # Initialize column
-    column_name = "cluster"
-    chart_data[column_name] = 0
+    def add_cluster_index(parent_df: DataFrame, sub_df: DataFrame, cluster_col: str):
+        values = sub_df[cluster_col]
+        rank_map = {v: i for i, v in enumerate(values.drop_duplicates())}
+        parent_df.loc[sub_df.index, f"{cluster_col}_index"] = values.map(rank_map)
 
-    # Aassign cluster id based on first encountered groups
-    keys = chart_data[group_columns].apply(tuple, axis=1)
-    chart_data["cluster"] = factorize(keys)[0] + 1
+    for _, sub_df in chart_data.groupby(by=["chart_index"], sort=False):
+        for col in cluster_cols:
+            add_cluster_index(chart_data, sub_df, col)
+
     return chart_data
 
 
-def add_element_pos_column(chart_data : DataFrame):
+def add_element_pos_column(chart_data: DataFrame, cluster_columns: list[str]):
     """
-    Adds a column that uses the time_pos and cluster_index to compute an element position column (used only for bars right now)
-    :param chart_data:
-    :return:
+    Computes elem_pos using base row spacing and optional cluster offsets.
     """
-    space_between_clusters = 0.625
-    time_pos = chart_data["time_pos"].values
-    # Cluster index needs to be indexed starting at zero so we subtract 1
-    # time_pos is already zero indexed
-    cluster_index = chart_data["cluster"].values - 1
-    n_time_points = chart_data["time_pos"].nunique()
-    chart_data['elem_pos'] = time_pos + (n_time_points + space_between_clusters) * cluster_index
+    # Initialize spacing
+    for _, sub_df in chart_data.groupby(by=['chart_index'], sort=False):
+        chart_data.loc[sub_df.index, "elem_pos"] = chart_data['row_id'] - 1
+
+    shift = 0.75    # Initialize inner cluster shift
+    for col in cluster_columns:
+        col_index = col + '_index'
+        for index, sub_df in chart_data.groupby(by=['chart_index'], sort=False):
+            s = sub_df[col_index]
+            changes = (s != s.shift()).astype(int)
+            changes.iloc[0] = 0  # No change at first element
+            cumulative_shift = shift * changes.cumsum()
+            chart_data.loc[sub_df.index,'elem_pos'] += cumulative_shift
+        shift += 0.50
+
     return chart_data
 
 
@@ -133,12 +136,15 @@ def add_time_pos_column(chart_data: DataFrame, chart_type : str):
     """
     # Initialize to integer
     sort_years = chart_data["sort_year"].values
-    sort_periods = chart_data["sort_period"].unique()
+    sort_periods = chart_data["sort_period"]
+    if sort_periods.min() == 1:
+        sort_periods = sort_periods - 1
 
     start_year = sort_years.min()
-    count_values = len(sort_periods)
+    count_values = sort_periods.nunique()
 
-    chart_data["time_pos"] = (sort_years - start_year) * count_values + sort_periods
+    chart_data['time_pos'] = (sort_years - start_year) * count_values + sort_periods
+
     return chart_data
 
 def add_values_column(chart_data: DataFrame, chart_type: str, cfg: dict) -> DataFrame:
@@ -164,10 +170,13 @@ def add_values_column(chart_data: DataFrame, chart_type: str, cfg: dict) -> Data
     # Extract raw values and ignore flags
     values = chart_data["amount"].values
     abs_values = abs(values)
-    ignore = chart_data["ignore"].values
 
     # Determine sign presence using ignore-aware logic
-    has_relevant_positive = ((values > 0) & (ignore == 0)).any()
+    if 'ignore' in chart_type:
+        ignore = chart_data["ignore"].values
+        has_relevant_positive = ((values > 0) & (ignore == 0)).any()
+    else:
+        has_relevant_positive = (values > 0).any()
     has_negative = (values < 0).any()
 
     # Apply sign normalization rules
@@ -275,6 +284,7 @@ def merge_ignore_rows_into_other(chart_data: DataFrame, chart_type: str) -> Data
 
     # Final cleanup: drop any remaining ignored rows
     chart_data.drop(chart_data[chart_data["ignore"] == 1].index, inplace=True)
+    chart_data.drop(chart_data[chart_data["percent"] < 1.0].index, inplace=True)
     chart_data.drop(columns=["ignore"], inplace=True)
 
     return chart_data
@@ -305,7 +315,7 @@ def add_parent_column(chart_data: DataFrame, chart_type: str) -> DataFrame:
         parent_asn = asn.rsplit(".", 1)[0]
         return lookup.get((row.period, parent_asn))
 
-    chart_data["parent"] = chart_data.apply(resolve_parent, axis=1)
+    chart_data["parent"] = (chart_data.apply(resolve_parent, axis=1)).astype("Int64")
     return chart_data
 
 
@@ -351,11 +361,6 @@ def add_color_column(chart_data: DataFrame, chart_type: str, cfg: dict) -> DataF
     color_keys = ["label"]
     chart_data["color"] = 0
 
-    if "bar" in chart_type:
-        n_years = chart_data["sort_year"].nunique()
-        if n_years > 1:
-            color_keys = ["sort_year"]
-
     # Build a single key per row (tuple when multiple keys)
     if len(color_keys) == 1:
         keys = chart_data[color_keys[0]]
@@ -368,11 +373,10 @@ def add_color_column(chart_data: DataFrame, chart_type: str, cfg: dict) -> DataF
     return chart_data
 
 
-def add_frame_dimensions(fig_data : DataFrame, chart_type : str) -> DataFrame:
+def add_frame_dimensions(fig_data : DataFrame, chart_elements : DataFrame, chart_type : str) -> DataFrame:
     orientations = None
     fig_indexes = fig_data['fig_index'].values
     n_elements_array = fig_data['n_elements'].values
-    n_time_points_array = fig_data['n_time_points'].values
     if 'bar' in chart_type:
         orientations = fig_data['orientation'].values
 
@@ -384,18 +388,19 @@ def add_frame_dimensions(fig_data : DataFrame, chart_type : str) -> DataFrame:
         idx = index - 1 # Needed for array indexing
         frame_width, frame_height = (0,0)
         n_elements = n_elements_array[idx]
-        n_time_points = n_time_points_array[idx]
+        size1 = n_elements * bar_element_size
+        elem_plot_size = max(size1, min_frame_size)
         if 'area' in chart_type:
             frame_width = min_frame_size
             frame_height = n_elements * area_element_size
         elif 'bar' in chart_type:
             orient = orientations[idx]
             if orient == "horizontal":
-                frame_height = n_elements * bar_element_size
+                frame_height = elem_plot_size
                 frame_width = min_frame_size
             elif orient == "vertical":
-                frame_height = n_frames * min_frame_size
-                frame_width = n_elements * bar_element_size
+                frame_width = elem_plot_size
+                frame_height = min_frame_size
         elif 'pie' in chart_type:
             frame_width = n_elements * pie_slice_size
             frame_height = frame_width
@@ -407,14 +412,6 @@ def add_frame_dimensions(fig_data : DataFrame, chart_type : str) -> DataFrame:
     # Apply min_frame_size constraint to both dimensions
     fig_data['frame_width'] = fig_data['frame_width'].clip(lower=min_frame_size)
     fig_data['frame_height'] = fig_data['frame_height'].clip(lower=min_frame_size)
-
-    # Now scale up to prevent aspect distortion
-    frame_width = fig_data['frame_width'].values[0]
-    frame_height = fig_data['frame_height'].values[0]
-    if (frame_width < frame_height):
-        fig_data['frame_width'] = fig_data['frame_width'].clip(lower=0.75 * frame_height)
-    elif ( frame_height < frame_width ):
-        fig_data['frame_height'] = fig_data['frame_height'].clip(lower=0.75 * frame_width)
 
     fig_data['dpi'] = 150
     return fig_data
@@ -514,8 +511,75 @@ def compute_figure_data(chart_elements : DataFrame, chart_type : str, cfg : dict
     fig_df = DataFrame(data=fig_data)
     fig_df["chart_type"] = chart_type
     add_fig_title_axes(fig_df, chart_elements, chart_type, cfg)
-    add_frame_dimensions(fig_df, chart_type)
+    add_frame_dimensions(fig_df, chart_elements, chart_type)
     return fig_df
+
+
+def fill_missing_assignments(chart_data: DataFrame) -> DataFrame:
+    """
+    Ensures every assignment appears in every period within each
+    (chart_index, level) group.
+
+    Missing rows are synthesized with:
+        count = 0
+        amount = 0
+        sort_year / sort_period correct
+        period preserved from period table
+    """
+
+    output_frames = []
+    group_cols = ["level"]
+
+    for _, sub_df in chart_data.groupby(group_cols, sort=False):
+
+        n_periods = sub_df["period"].nunique()
+        n_assignments = sub_df["assignment"].nunique()
+
+        # Short-circuit: already rectangular
+        if len(sub_df) == n_periods * n_assignments:
+            output_frames.append(sub_df)
+            continue
+
+        # Unique assignments (appearance order preserved)
+        assignments = sub_df["assignment"].drop_duplicates()
+
+        # Unique periods with their year/period metadata
+        periods_df = sub_df[["period", "sort_year", "sort_period"]].drop_duplicates()
+
+        # Cartesian product (period × assignment)
+        full_index = (
+            periods_df.assign(key=1)
+            .merge(assignments.to_frame(name="assignment").assign(key=1), on="key")
+            .drop(columns="key")
+        )
+
+        # Merge original data
+        merged = full_index.merge(
+            sub_df,
+            on=["period", "assignment", "sort_year", "sort_period"],
+            how="left",
+        )
+
+        # Identify missing rows
+        missing_mask = merged["count"].isna()
+
+        # Fill missing numeric values
+        merged.loc[missing_mask, "count"] = 0
+        merged.loc[missing_mask, "amount"] = 0
+
+        # Copy stable columns from first row as template
+        template_row = sub_df.iloc[0]
+        for col in sub_df.columns:
+            if col in ["period", "assignment", "sort_year", "sort_period", "count", "amount"]:
+                continue
+            merged.loc[missing_mask, col] = template_row[col]
+
+        # Preserve original column order
+        merged = merged[sub_df.columns]
+
+        output_frames.append(merged)
+
+    return pd.concat(output_frames, ignore_index=True)
 
 
 def compute_chart_elements(source_data : DataFrame, chart_type : str, cfg : dict) -> DataFrame:
@@ -530,20 +594,25 @@ def compute_chart_elements(source_data : DataFrame, chart_type : str, cfg : dict
     """
     # Chart data starts as copy of input data
     chart_data = source_data.copy()
+    if 'bar' in chart_type:
+        chart_data = fill_missing_assignments(chart_data)
     # Add enriched chart data one column at a time
     # ----- Begin Adding Element Columns
     add_row_indexes(chart_data)
     add_chart_indexes(chart_data,chart_type)
-    add_cluster_indexes(chart_data,chart_type)
+    add_time_pos_column(chart_data, cfg)
     add_label_column(chart_data,chart_type)
     add_parent_column(chart_data, chart_type)
     add_stats_columns(chart_data, chart_type, cfg)
-    add_ignore_column(chart_data, cfg)
+    if 'bar' not in chart_type:
+        add_ignore_column(chart_data, cfg)
     add_values_column(chart_data,chart_type, cfg)
-    add_time_pos_column(chart_data, cfg)
-    if chart_type == "bar":
-        add_element_pos_column(chart_data)
-    merge_ignore_rows_into_other(chart_data, cfg)
+    if 'bar' not in chart_type:
+        merge_ignore_rows_into_other(chart_data, cfg)
+    if 'bar' in chart_type:
+        cluster_cols = ['sort_year', 'assignment', 'sort_period']
+        add_cluster_index_columns(chart_data, cluster_cols)
+        add_element_pos_column(chart_data, ['assignment','sort_period'])
     add_color_column(chart_data, chart_type, cfg)
     # ----- End Adding Element Columns
     return chart_data

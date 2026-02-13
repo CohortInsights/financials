@@ -252,6 +252,10 @@ def render_bars(chart_elements: pd.DataFrame,
             ("cluster" in chart_elements.columns)
             and (chart_elements["cluster"].nunique() > 1)
     )
+    has_mutli_periods = (
+            ("period" in chart_elements.columns)
+            and (chart_elements["period"].nunique() > 1)
+    )
     if has_clusters:
         cluster_centers = (
             chart_elements.groupby("cluster")["elem_pos"].mean()
@@ -261,7 +265,7 @@ def render_bars(chart_elements: pd.DataFrame,
         )
 
     title_font_size = 10
-    label_font_size = 6
+    major_label_font_size = 8
 
     # ---- Grid extents ----
     if "grid_year" in figure_data.columns and "grid_period" in figure_data.columns:
@@ -305,11 +309,10 @@ def render_bars(chart_elements: pd.DataFrame,
         df = chart_elements[chart_elements["chart_index"] == chart_index]
 
         data_col    = fig_row["currency_col"]
-        time_col    = fig_row["time_col"]
         currency_format = fig_row["currency_format"]
 
         values     = df[data_col].values
-        outside_bar_labels = df["label"].values
+        main_bar_labels = df["label"].values
 
         color_idx = df["color"].values - 1
         colors = [palette[i] for i in color_idx]
@@ -324,9 +327,9 @@ def render_bars(chart_elements: pd.DataFrame,
         # ---- Orientation-aware axes placement ----
         if orientation == "horizontal":
             left   = 0.2
-            width  = 0.75
-            bottom = 0.1
-            height = 0.80
+            width  = 0.78
+            bottom = 0.01
+            height = 0.95
         else:
             left   = 0.1
             width  = 0.80
@@ -334,7 +337,7 @@ def render_bars(chart_elements: pd.DataFrame,
             height = 0.70
 
         ax = fig.add_axes([left, bottom, width, height])
-        ax.tick_params(labelsize=label_font_size)
+        ax.tick_params(labelsize=major_label_font_size)
 
         # Construct index 0... number of bars - 1
         positions = chart_elements["elem_pos"]
@@ -346,27 +349,28 @@ def render_bars(chart_elements: pd.DataFrame,
 
             if has_clusters:
                 ax.set_yticks(cluster_centers.values)
-                ax.set_yticklabels(cluster_labels.values, fontsize=label_font_size)
+                ax.set_yticklabels(cluster_labels.values, fontsize=major_label_font_size)
             else:
                 ax.set_yticks(positions)
-                ax.set_yticklabels(outside_bar_labels, fontsize=label_font_size)
+                ax.set_yticklabels(main_bar_labels, fontsize=major_label_font_size)
             ax.invert_yaxis()
         else:
             ax.bar(positions, values, color=colors, align="center")
             ax.yaxis.set_major_formatter(StrMethodFormatter(currency_format))
 
-            ax.set_xticks(positions)
-            ax.set_xticklabels(outside_bar_labels,
-                               fontsize=label_font_size,
-                               rotation=90)
+            if has_clusters:
+                ax.set_xticks(cluster_centers.values)
+                ax.set_xticklabels(cluster_labels.values, fontsize=major_label_font_size, rotation=90)
+            else:
+                ax.set_xticks(positions)
+                ax.set_xticklabels(main_bar_labels, fontsize=major_label_font_size)
 
         # Further decoarations
         ax.tick_params(axis="both", which="both", length=0)
-
         ax.set_title(
             fig_row["title"],
             fontsize=title_font_size,
-            y=1.05,
+            y=1.01,
             pad=0,
         )
 
