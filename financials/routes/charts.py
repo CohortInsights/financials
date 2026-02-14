@@ -36,7 +36,7 @@ def compute_chart_data(args: dict) -> DataFrame:
 
     min_frac = 0.010
     if chart_type == "pie":
-        min_frac = 0.03
+        min_frac = 0.02
 
     cfg = {
         "min_frac": min_frac

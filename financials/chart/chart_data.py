@@ -412,13 +412,6 @@ def add_frame_dimensions(fig_data : DataFrame, chart_elements : DataFrame, chart
     fig_data['frame_width'] = fig_data['frame_width'].clip(lower=min_frame_size)
     fig_data['frame_height'] = fig_data['frame_height'].clip(lower=min_frame_size)
 
-    frame_width = fig_data['frame_width'][0]
-    frame_height = fig_data['frame_height'][0]
-    if 0.8*frame_width > frame_height:
-        fig_data['frame_height'] = fig_data['frame_height'].clip(lower=0.8 * frame_width)
-    elif 0.8*frame_height > frame_width:
-        fig_data['frame_width'] = fig_data['frame_width'].clip(lower=0.8 * frame_height)
-
     fig_data['dpi'] = 150
     return fig_data
 
@@ -520,16 +513,7 @@ def compute_figure_data(chart_elements : DataFrame, chart_type : str, cfg : dict
 
 
 def fill_missing_assignments(chart_data: DataFrame) -> DataFrame:
-    """
-    Ensures every assignment appears in every period within each
-    (chart_index, level) group.
 
-    Missing rows are synthesized with:
-        count = 0
-        amount = 0
-        sort_year / sort_period correct
-        period preserved from period table
-    """
     output_frames = []
     group_cols = ["level"]
 
@@ -538,49 +522,48 @@ def fill_missing_assignments(chart_data: DataFrame) -> DataFrame:
         n_periods = sub_df["period"].nunique()
         n_assignments = sub_df["assignment"].nunique()
 
-        # Short-circuit: already rectangular
         if len(sub_df) == n_periods * n_assignments:
             output_frames.append(sub_df)
             continue
 
-        # Unique assignments (appearance order preserved)
-        assignments = sub_df["assignment"].drop_duplicates()
-
-        # Unique periods with their year/period metadata
-        periods_df = sub_df[["period", "sort_year", "sort_period"]].drop_duplicates()
-
-        # Cartesian product (period × assignment)
-        full_index = (
-            periods_df.assign(key=1)
-            .merge(assignments.to_frame(name="assignment").assign(key=1), on="key")
-            .drop(columns="key")
+        # Unique values preserving appearance order
+        assignments = sub_df["assignment"].drop_duplicates().tolist()
+        periods_df = (
+            sub_df[["period", "sort_year", "sort_period"]]
+            .drop_duplicates()
+            .to_dict("records")
         )
 
-        # Merge original data
-        merged = full_index.merge(
-            sub_df,
-            on=["period", "assignment", "sort_year", "sort_period"],
-            how="left",
+        # Existing keys
+        existing = set(
+            zip(
+                sub_df["period"],
+                sub_df["assignment"],
+                sub_df["sort_year"],
+                sub_df["sort_period"],
+            )
         )
 
-        # Identify missing rows
-        missing_mask = merged["count"].isna()
+        missing_rows = []
 
-        # Fill missing numeric values
-        merged.loc[missing_mask, "count"] = 0
-        merged.loc[missing_mask, "amount"] = 0
+        for p in periods_df:
+            for asn in assignments:
+                key = (p["period"], asn, p["sort_year"], p["sort_period"])
+                if key not in existing:
+                    new_row = sub_df.iloc[0].copy()
+                    new_row["period"] = p["period"]
+                    new_row["assignment"] = asn
+                    new_row["sort_year"] = p["sort_year"]
+                    new_row["sort_period"] = p["sort_period"]
+                    new_row["count"] = 0
+                    new_row["amount"] = 0
+                    missing_rows.append(new_row)
 
-        # Copy stable columns from first row as template
-        template_row = sub_df.iloc[0]
-        for col in sub_df.columns:
-            if col in ["period", "assignment", "sort_year", "sort_period", "count", "amount"]:
-                continue
-            merged.loc[missing_mask, col] = template_row[col]
+        if missing_rows:
+            missing_df = pd.DataFrame(missing_rows)
+            sub_df = pd.concat([sub_df, missing_df], ignore_index=True)
 
-        # Preserve original column order
-        merged = merged[sub_df.columns]
-
-        output_frames.append(merged)
+        output_frames.append(sub_df)
 
     return pd.concat(output_frames, ignore_index=True)
 
@@ -597,7 +580,6 @@ def compute_chart_elements(source_data : DataFrame, chart_type : str, cfg : dict
     """
     # Chart data starts as copy of input data
     chart_data = source_data.copy()
-    print( chart_data.to_csv())
     if 'bar' in chart_type:
         chart_data = fill_missing_assignments(chart_data)
     # Add enriched chart data one column at a time

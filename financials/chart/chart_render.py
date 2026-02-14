@@ -230,29 +230,18 @@ def render_pies(chart_elements: pd.DataFrame,
 
 def render_bars(chart_elements: pd.DataFrame,
                 figure_data: pd.DataFrame) -> plt.figure:
-    """
-    Deterministic bar chart renderer.
 
-    - One composite Figure
-    - One bar chart per fig_index / chart_index
-    - Fully independent axes (no subplot grid)
-    - All layout derived explicitly from figure_data
-    - Axis identity comes from chart_elements['label']
-    - time_col rendered inside bars
-    - Fixed category-label margin based on orientation
-    """
-
-    # ---- Figure geometry (authoritative singletons) ----
     frame_width  = figure_data.iloc[0]["frame_width"]
     frame_height = figure_data.iloc[0]["frame_height"]
-    orientation = figure_data.iloc[0]["orientation"]
+    orientation  = figure_data.iloc[0]["orientation"]
     dpi          = figure_data.iloc[0]["dpi"]
-    period_labels = chart_elements['period']
-    assignments = chart_elements['assignment']
-    has_multi_periods = period_labels.nunique() > 1
-    has_multi_asn =  assignments.nunique() > 1
 
-    title_font_size = 11
+    period_labels = chart_elements['period']
+    assignments   = chart_elements['assignment']
+    has_multi_periods = period_labels.nunique() > 1
+    has_multi_asn     = assignments.nunique() > 1
+
+    title_font_size       = 11
     major_label_font_size = 8
 
     # ---- Grid extents ----
@@ -276,7 +265,6 @@ def render_bars(chart_elements: pd.DataFrame,
         n_rows = 1
         n_cols = 1
 
-    # ---- Composite figure size ----
     fig_width_px  = n_cols * frame_width
     fig_height_px = n_rows * frame_height
 
@@ -285,59 +273,70 @@ def render_bars(chart_elements: pd.DataFrame,
         dpi=dpi,
     )
 
-    # ---- Color palette (authoritative indices) ----
     color_count = chart_elements["color"].max()
     palette = get_color_palette(color_count)
 
+    # ---- Helper: adjust margin based on rendered tick labels ----
+    def adjust_margin(ax):
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+
+        fig_width_pixels  = fig.get_figwidth() * fig.dpi
+        fig_height_pixels = fig.get_figheight() * fig.dpi
+
+        if orientation == "horizontal":
+            labels = ax.get_yticklabels()
+            max_pixels = max(
+                label.get_window_extent(renderer=renderer).width
+                for label in labels
+            ) if labels else 0
+
+            left = (max_pixels + 16) / fig_width_pixels
+            ax.set_position([left, 0.05, 0.95 - left, 0.90])
+
+        else:
+            labels = ax.get_xticklabels()
+            max_pixels = max(
+                label.get_window_extent(renderer=renderer).height
+                for label in labels
+            ) if labels else 0
+
+            bottom = (max_pixels + 16) / fig_height_pixels
+            ax.set_position([0.05, bottom, 0.90, 0.95 - bottom])
+
     # ---- Render each bar chart independently ----
     for _, fig_row in figure_data.iterrows():
+
         chart_index = fig_row["fig_index"]
-        # Extract a new DataFrame one chart at a time
         df = chart_elements[chart_elements["chart_index"] == chart_index]
 
-        data_col    = fig_row["currency_col"]
+        data_col        = fig_row["currency_col"]
         currency_format = fig_row["currency_format"]
 
-        values     = df[data_col].values
-        main_bar_labels = None
+        values = df[data_col].values
+
         if has_multi_asn:
-            main_bar_labels = df["label"].values
+            main_bar_labels = df["label"].astype(str).values
+        else:
+            main_bar_labels = None
+
         if has_multi_periods:
             if has_multi_asn:
-                main_bar_labels = main_bar_labels + " " + period_labels
+                main_bar_labels = (
+                    df["label"].astype(str) + " " + df["period"].astype(str)
+                ).values
             else:
-                main_bar_labels = period_labels
-        max_label_len = main_bar_labels.str.len().max()
+                main_bar_labels = df["period"].astype(str).values
 
         color_idx = df["color"].values - 1
         colors = [palette[i] for i in color_idx]
 
-        if row_field is not None:
-            row = fig_row[row_field]
-            col = fig_row[col_field]
-        else:
-            row = 0
-            col = 0
-
-        # ---- Orientation-aware axes placement ----
-        if orientation == "horizontal":
-            left   = 0.00175 * max_label_len * major_label_font_size
-            width  = 0.95 - left
-            bottom = 0.05
-            height = 0.95 - bottom
-        else:
-            left   = 0.05
-            width  = 0.95 - left
-            bottom = 0.00175 * max_label_len * major_label_font_size
-            height = 0.95 - bottom
-
-        ax = fig.add_axes([left, bottom, width, height])
+        # Temporary full-area axes
+        ax = fig.add_axes([0.05, 0.05, 0.90, 0.90])
         ax.tick_params(labelsize=major_label_font_size)
 
-        # Construct index 0... number of bars - 1
-        positions = df["elem_pos"]
+        positions = df["elem_pos"].values
 
-        # ---- Bar geometry + labeling ----
         if orientation == "horizontal":
             ax.barh(positions, values, color=colors)
             ax.xaxis.set_major_formatter(StrMethodFormatter(currency_format))
@@ -345,20 +344,28 @@ def render_bars(chart_elements: pd.DataFrame,
             ax.set_yticks(positions)
             ax.set_yticklabels(main_bar_labels, fontsize=major_label_font_size)
             ax.invert_yaxis()
+
         else:
             ax.bar(positions, values, color=colors, align="center")
             ax.yaxis.set_major_formatter(StrMethodFormatter(currency_format))
 
             ax.set_xticks(positions)
-            ax.set_xticklabels(main_bar_labels, rotation=90, fontsize=major_label_font_size)
+            ax.set_xticklabels(
+                main_bar_labels,
+                rotation=90,
+                fontsize=major_label_font_size
+            )
 
-        # Further decoarations
         ax.tick_params(axis="both", which="both", length=0)
+
         ax.set_title(
             fig_row["title"],
             fontsize=title_font_size,
             y=1.01,
             pad=0,
         )
+
+        # ---- Precise margin adjustment ----
+        adjust_margin(ax)
 
     return fig
