@@ -48,3 +48,26 @@ def render_warnings(fig, warnings, chart_spec, *, fontsize=8):
         fontsize=fontsize,
         color="gray",
     )
+
+from pandas import Series
+
+def get_common_prefix(series: Series) -> str:
+    """
+    Returns the dot-delimited prefix common to all items in the series.
+    Example:
+        ["a.b.c", "a.b.d", "a.b"]  ->  "a.b"
+    """
+    if series.empty:
+        return ""
+
+    split_values = series.astype(str).str.split(".").tolist()
+
+    # Zip columns together and stop at first mismatch
+    prefix_parts = []
+    for parts in zip(*split_values):
+        if len(set(parts)) == 1:
+            prefix_parts.append(parts[0])
+        else:
+            break
+
+    return ".".join(prefix_parts)

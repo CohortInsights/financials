@@ -245,28 +245,14 @@ def render_bars(chart_elements: pd.DataFrame,
     # ---- Figure geometry (authoritative singletons) ----
     frame_width  = figure_data.iloc[0]["frame_width"]
     frame_height = figure_data.iloc[0]["frame_height"]
-    orientation = "vertical"
+    orientation = figure_data.iloc[0]["orientation"]
     dpi          = figure_data.iloc[0]["dpi"]
-    cluster_labels, cluster_centers = None, None
-    asn_index = "assignment_index"
-    has_assignment_clusters = (
-            (asn_index in chart_elements.columns)
-            and (chart_elements[asn_index].nunique() > 1)
-    )
-    if has_assignment_clusters:
-        cluster_centers = (
-            chart_elements.groupby(asn_index)["elem_pos"].mean()
-        )
-        cluster_labels = (
-            chart_elements.groupby(asn_index)["label"].first()
-        )
+    period_labels = chart_elements['period']
+    assignments = chart_elements['assignment']
+    has_multi_periods = period_labels.nunique() > 1
+    has_multi_asn =  assignments.nunique() > 1
 
-    has_mutli_periods = (
-            ("period" in chart_elements.columns)
-            and (chart_elements["period"].nunique() > 1)
-    )
-
-    title_font_size = 10
+    title_font_size = 11
     major_label_font_size = 8
 
     # ---- Grid extents ----
@@ -305,7 +291,6 @@ def render_bars(chart_elements: pd.DataFrame,
 
     # ---- Render each bar chart independently ----
     for _, fig_row in figure_data.iterrows():
-
         chart_index = fig_row["fig_index"]
         # Extract a new DataFrame one chart at a time
         df = chart_elements[chart_elements["chart_index"] == chart_index]
@@ -314,7 +299,15 @@ def render_bars(chart_elements: pd.DataFrame,
         currency_format = fig_row["currency_format"]
 
         values     = df[data_col].values
-        main_bar_labels = df["label"].values
+        main_bar_labels = None
+        if has_multi_asn:
+            main_bar_labels = df["label"].values
+        if has_multi_periods:
+            if has_multi_asn:
+                main_bar_labels = main_bar_labels + " " + period_labels
+            else:
+                main_bar_labels = period_labels
+        max_label_len = main_bar_labels.str.len().max()
 
         color_idx = df["color"].values - 1
         colors = [palette[i] for i in color_idx]
@@ -328,44 +321,36 @@ def render_bars(chart_elements: pd.DataFrame,
 
         # ---- Orientation-aware axes placement ----
         if orientation == "horizontal":
-            left   = 0.2
-            width  = 0.78
-            bottom = 0.01
-            height = 0.95
+            left   = 0.00175 * max_label_len * major_label_font_size
+            width  = 0.95 - left
+            bottom = 0.05
+            height = 0.95 - bottom
         else:
-            left   = 0.1
-            width  = 0.80
-            bottom = 0.225
-            height = 0.70
+            left   = 0.05
+            width  = 0.95 - left
+            bottom = 0.00175 * max_label_len * major_label_font_size
+            height = 0.95 - bottom
 
         ax = fig.add_axes([left, bottom, width, height])
         ax.tick_params(labelsize=major_label_font_size)
 
         # Construct index 0... number of bars - 1
-        positions = chart_elements["elem_pos"]
+        positions = df["elem_pos"]
 
         # ---- Bar geometry + labeling ----
         if orientation == "horizontal":
             ax.barh(positions, values, color=colors)
             ax.xaxis.set_major_formatter(StrMethodFormatter(currency_format))
 
-            if has_assignment_clusters:
-                ax.set_yticks(cluster_centers.values)
-                ax.set_yticklabels(cluster_labels.values, fontsize=major_label_font_size)
-            else:
-                ax.set_yticks(positions)
-                ax.set_yticklabels(main_bar_labels, fontsize=major_label_font_size)
+            ax.set_yticks(positions)
+            ax.set_yticklabels(main_bar_labels, fontsize=major_label_font_size)
             ax.invert_yaxis()
         else:
             ax.bar(positions, values, color=colors, align="center")
             ax.yaxis.set_major_formatter(StrMethodFormatter(currency_format))
 
-            if has_assignment_clusters:
-                ax.set_xticks(cluster_centers.values)
-                ax.set_xticklabels(cluster_labels.values, fontsize=major_label_font_size, rotation=90)
-            else:
-                ax.set_xticks(positions)
-                ax.set_xticklabels(main_bar_labels, fontsize=major_label_font_size)
+            ax.set_xticks(positions)
+            ax.set_xticklabels(main_bar_labels, rotation=90, fontsize=major_label_font_size)
 
         # Further decoarations
         ax.tick_params(axis="both", which="both", length=0)

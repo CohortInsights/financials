@@ -1,6 +1,6 @@
 from pandas import DataFrame, Series, factorize, concat
 
-from financials.chart.chart_common import ChartConfigError
+from financials.chart.chart_common import ChartConfigError, get_common_prefix
 
 global_chart_types: dict = {
     "pie": "Compare relative percentages of assignments for a single or multiple data periods",
@@ -11,8 +11,7 @@ global_chart_types: dict = {
 bar_element_size = 40   # Thickness of any bar in a bar chart
 area_element_size = 300 # Number of areas * this number equals height of stacked area plot
 pie_slice_size = 75     # Number of slices * this number equals size of square pie area
-min_frame_size = 800  # No dimension should be shorter than this size
-bar_widths_between_clusters = 0.75  # Spacing in units of bars between clusters
+min_frame_size = 700  # No dimension should be shorter than this size
 
 
 def get_char_types() -> dict:
@@ -383,13 +382,13 @@ def add_frame_dimensions(fig_data : DataFrame, chart_elements : DataFrame, chart
     frame_width_list = []
     frame_height_list = []
 
-    n_frames = len(fig_data)
     for index in fig_indexes:
         idx = index - 1 # Needed for array indexing
         frame_width, frame_height = (0,0)
         n_elements = n_elements_array[idx]
-        size1 = n_elements * bar_element_size
-        elem_plot_size = max(size1, min_frame_size)
+        elem_plot_size = n_elements * bar_element_size
+        elem_plot_size = max(elem_plot_size, min_frame_size)
+        # elem_plot_size = max(size1, min_frame_size)
         if 'area' in chart_type:
             frame_width = min_frame_size
             frame_height = n_elements * area_element_size
@@ -413,6 +412,13 @@ def add_frame_dimensions(fig_data : DataFrame, chart_elements : DataFrame, chart
     fig_data['frame_width'] = fig_data['frame_width'].clip(lower=min_frame_size)
     fig_data['frame_height'] = fig_data['frame_height'].clip(lower=min_frame_size)
 
+    frame_width = fig_data['frame_width'][0]
+    frame_height = fig_data['frame_height'][0]
+    if 0.8*frame_width > frame_height:
+        fig_data['frame_height'] = fig_data['frame_height'].clip(lower=0.8 * frame_width)
+    elif 0.8*frame_height > frame_width:
+        fig_data['frame_width'] = fig_data['frame_width'].clip(lower=0.8 * frame_height)
+
     fig_data['dpi'] = 150
     return fig_data
 
@@ -431,14 +437,12 @@ def add_fig_title_axes(fig_data : DataFrame, elements : DataFrame, chart_type : 
 
     for index in fig_indexes:
         index_elements = elements[elements['chart_index'] == index]
-        assignments = index_elements["assignment"].values
-        asn : str = assignments[0]
         period = index_elements["period"].values
         years = index_elements["sort_year"].values
         start_period = index_elements['sort_period'].values.min()
         y1,y2 = years.min(), years.max()
         p1,p2 = period.min(), period.max()
-        t = asn.rsplit(".", 1)[0]
+        t = get_common_prefix(elements['assignment'])
         duration = 'Annually'
         n_periods = 1
         segmented = False
@@ -526,7 +530,6 @@ def fill_missing_assignments(chart_data: DataFrame) -> DataFrame:
         sort_year / sort_period correct
         period preserved from period table
     """
-
     output_frames = []
     group_cols = ["level"]
 
@@ -594,6 +597,7 @@ def compute_chart_elements(source_data : DataFrame, chart_type : str, cfg : dict
     """
     # Chart data starts as copy of input data
     chart_data = source_data.copy()
+    print( chart_data.to_csv())
     if 'bar' in chart_type:
         chart_data = fill_missing_assignments(chart_data)
     # Add enriched chart data one column at a time
