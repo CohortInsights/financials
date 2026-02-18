@@ -192,7 +192,9 @@ def add_values_column(chart_data: DataFrame, chart_type: str, cfg: dict) -> Data
     # Need a scaled down version of values if they exceed 10,000
     if ( max_abs_value ) >= 1000:
         scaled_values = 0.001*values
-        chart_data["scaled_values"] = scaled_values.round(2)
+        chart_data["scaled_values"] = scaled_values.round(3)
+        if max_abs_value >= 10000:
+            chart_data["scaled_values"] = scaled_values.round(2)
 
     return chart_data
 
@@ -428,6 +430,7 @@ def add_fig_title_axes(fig_data : DataFrame, elements : DataFrame, chart_type : 
     grid_period_list, grid_year_list = [], []
     segmented_list = []
     start_year = elements['sort_year'].min()
+    max_value = elements['values'].max()
 
     for index in fig_indexes:
         index_elements = elements[elements['chart_index'] == index]
@@ -480,7 +483,10 @@ def add_fig_title_axes(fig_data : DataFrame, elements : DataFrame, chart_type : 
     if 'scaled_values' in elements.columns:
         fig_data['currency_col'] = "scaled_values"
         fig_data['currency_unit'] = "dollars_thousands"
-        fig_data['currency_format'] = '${x:,.0f}K'
+        if max_value >= 10000:
+            fig_data['currency_format'] = '${x:,.0f}K'
+        else:
+            fig_data['currency_format'] = '${x:,.1f}K'
     orientation = orientation_list[0]
     if orientation == "horizontal":
         fig_data['x_axis'] = "currency"
@@ -575,7 +581,7 @@ def compute_chart_elements(source_data : DataFrame, chart_type : str, cfg : dict
     add_chart_indexes(chart_data,chart_type)
     add_time_pos_column(chart_data, cfg)
     add_label_column(chart_data,chart_type)
-    # add_parent_column(chart_data, chart_type)
+    add_parent_column(chart_data, chart_type)
     add_stats_columns(chart_data, chart_type, cfg)
     add_ignore_column(chart_data, cfg)
     if 'bar' in chart_type:

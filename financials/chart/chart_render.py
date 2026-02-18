@@ -346,6 +346,7 @@ def render_bars(chart_elements: pd.DataFrame,
 
         # Temporary full-area axes, overriden below by adjust_margin
         ax = fig.add_axes([0.05, 0.05, 0.90, 0.90])
+        ax.tick_params(labelsize=major_label_font_size)
 
         positions = df["elem_pos"].values
 
@@ -371,7 +372,7 @@ def render_bars(chart_elements: pd.DataFrame,
             )
             ax.margins(x=0)
 
-        ax.tick_params(axis="both", which="both", length=0)
+        ax.tick_params(axis="both", which="both", length=4)
 
         ax.set_title(
             fig_row["title"],
