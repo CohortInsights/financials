@@ -109,19 +109,22 @@ def add_element_pos_column(chart_data: DataFrame, cluster_columns: list[str]):
     Computes elem_pos using base row spacing and optional cluster offsets.
     """
     # Initialize spacing
-    for _, sub_df in chart_data.groupby(by=['chart_index'], sort=False):
-        chart_data.loc[sub_df.index, "elem_pos"] = chart_data['row_id'] - 1
+    chart_data["elem_pos"] = (
+        chart_data
+        .groupby("chart_index", sort=False)
+        .cumcount()
+    )
 
-    shift = 0.75    # Initialize inner cluster shift
     for col in cluster_columns:
         col_index = col + '_index'
         for index, sub_df in chart_data.groupby(by=['chart_index'], sort=False):
             s = sub_df[col_index]
             changes = (s != s.shift()).astype(int)
-            changes.iloc[0] = 0  # No change at first element
-            cumulative_shift = shift * changes.cumsum()
-            chart_data.loc[sub_df.index,'elem_pos'] += cumulative_shift
-        shift += 0.50
+            n_unique = changes.nunique()
+            if n_unique > 1:
+                changes.iloc[0] = 0  # No change at first element
+                cumulative_shift = changes.cumsum()
+                chart_data.loc[sub_df.index,'elem_pos'] += cumulative_shift
 
     return chart_data
 
@@ -171,7 +174,7 @@ def add_values_column(chart_data: DataFrame, chart_type: str, cfg: dict) -> Data
     abs_values = abs(values)
 
     # Determine sign presence using ignore-aware logic
-    if 'ignore' in chart_type:
+    if 'ignore' in chart_data:
         ignore = chart_data["ignore"].values
         has_relevant_positive = ((values > 0) & (ignore == 0)).any()
     else:
@@ -187,7 +190,7 @@ def add_values_column(chart_data: DataFrame, chart_type: str, cfg: dict) -> Data
     chart_data["values"] = values
     max_abs_value = abs_values.max()
     # Need a scaled down version of values if they exceed 10,000
-    if ( max_abs_value ) >= 10000:
+    if ( max_abs_value ) >= 1000:
         scaled_values = 0.001*values
         chart_data["scaled_values"] = scaled_values.round(2)
 
@@ -207,25 +210,23 @@ def add_ignore_column(chart_data: DataFrame, chart_type: str) -> DataFrame:
 
     # Per-row significance
     abs_values = chart_data["amount"].abs()
-    significant = abs_values >= chart_data["threshold"]
-
-    # Determine if each (label, level) is ever significant
-    label_significant = (
-        significant
-        .groupby([chart_data["label"], chart_data["level"]])
-        .any()
-    )
-
-    # Broadcast back to rows
-    chart_data["ignore"] = (
-        ~chart_data
-        .set_index(["label", "level"])
-        .index
-        .map(label_significant)
-        .values
-    ).astype(int)
+    chart_data['ignore'] = (abs_values < chart_data["threshold"]).astype(int)
 
     return chart_data
+
+
+def drop_asn_rows_with_ignore(chart_data: DataFrame) -> DataFrame:
+    """
+    Drop all rows linked to an assignment where any row has ignore == 1
+    """
+    bad_assignments = (
+        chart_data
+        .groupby("assignment")["ignore"]
+        .max()
+        .loc[lambda s: s == 1]
+        .index
+    )
+    return chart_data[~chart_data["assignment"].isin(bad_assignments)]
 
 
 def merge_ignore_rows_into_other(chart_data: DataFrame, chart_type: str) -> DataFrame:
@@ -332,12 +333,12 @@ def add_stats_columns(chart_data: DataFrame, chart_type: str, cfg: dict) -> Data
         values = chart_data.loc[idx, "amount"]
         abs_values = values.abs()
 
-        mag = abs_values.sum()
-        max_val = abs_values.max()
+        sum = abs_values.sum()
+        mag = abs_values.max()
         threshold = mag * min_frac
 
         if mag > 0:
-            percent = (abs_values * 100.0 / mag).round(1)
+            percent = (abs_values * 100.0 / sum).round(1)
         else:
             percent = Series(0.0, index=abs_values.index)
 
@@ -515,55 +516,41 @@ def compute_figure_data(chart_elements : DataFrame, chart_type : str, cfg : dict
 def fill_missing_assignments(chart_data: DataFrame) -> DataFrame:
 
     output_frames = []
-    group_cols = ["level"]
 
-    for _, sub_df in chart_data.groupby(group_cols, sort=False):
+    for _, sub_df in chart_data.groupby(["level"], sort=False):
 
-        n_periods = sub_df["period"].nunique()
-        n_assignments = sub_df["assignment"].nunique()
-
-        if len(sub_df) == n_periods * n_assignments:
-            output_frames.append(sub_df)
-            continue
-
-        # Unique values preserving appearance order
-        assignments = sub_df["assignment"].drop_duplicates().tolist()
-        periods_df = (
-            sub_df[["period", "sort_year", "sort_period"]]
+        # --- Unique grid axes ---
+        assignments = sub_df["assignment"].drop_duplicates()
+        time_points = (
+            sub_df[["sort_year", "sort_period", "period"]]
             .drop_duplicates()
-            .to_dict("records")
         )
 
-        # Existing keys
-        existing = set(
-            zip(
-                sub_df["period"],
-                sub_df["assignment"],
-                sub_df["sort_year"],
-                sub_df["sort_period"],
+        # Build Cartesian product
+        full_index = (
+            time_points
+            .assign(key=1)
+            .merge(
+                assignments.to_frame(name="assignment").assign(key=1),
+                on="key",
             )
+            .drop("key", axis=1)
         )
 
-        missing_rows = []
+        # Merge existing data onto full grid
+        merged = full_index.merge(
+            sub_df,
+            on=["assignment", "sort_year", "sort_period", "period"],
+            how="left",
+            suffixes=("", "_orig"),
+        )
 
-        for p in periods_df:
-            for asn in assignments:
-                key = (p["period"], asn, p["sort_year"], p["sort_period"])
-                if key not in existing:
-                    new_row = sub_df.iloc[0].copy()
-                    new_row["period"] = p["period"]
-                    new_row["assignment"] = asn
-                    new_row["sort_year"] = p["sort_year"]
-                    new_row["sort_period"] = p["sort_period"]
-                    new_row["count"] = 0
-                    new_row["amount"] = 0
-                    missing_rows.append(new_row)
+        # Fill numeric columns
+        for col in ["count", "amount"]:
+            if col in merged.columns:
+                merged[col] = merged[col].fillna(0)
 
-        if missing_rows:
-            missing_df = pd.DataFrame(missing_rows)
-            sub_df = pd.concat([sub_df, missing_df], ignore_index=True)
-
-        output_frames.append(sub_df)
+        output_frames.append(merged)
 
     return pd.concat(output_frames, ignore_index=True)
 
@@ -588,16 +575,19 @@ def compute_chart_elements(source_data : DataFrame, chart_type : str, cfg : dict
     add_chart_indexes(chart_data,chart_type)
     add_time_pos_column(chart_data, cfg)
     add_label_column(chart_data,chart_type)
-    add_parent_column(chart_data, chart_type)
+    # add_parent_column(chart_data, chart_type)
     add_stats_columns(chart_data, chart_type, cfg)
-    if 'bar' not in chart_type:
-        add_ignore_column(chart_data, cfg)
-    add_values_column(chart_data,chart_type, cfg)
-    if 'bar' not in chart_type:
+    add_ignore_column(chart_data, cfg)
+    if 'bar' in chart_type:
+        # chart_data = drop_asn_rows_with_ignore(chart_data)
+        add_values_column(chart_data, chart_type, cfg)
+    else:
+        add_values_column(chart_data, chart_type, cfg)
         merge_ignore_rows_into_other(chart_data, cfg)
     if 'bar' in chart_type:
         cluster_cols = ['sort_year', 'assignment', 'sort_period']
         add_cluster_index_columns(chart_data, cluster_cols)
+        chart_data.sort_values(by=["sort_period","assignment_index","sort_year"], inplace=True)
         add_element_pos_column(chart_data, ['assignment','sort_period'])
     add_color_column(chart_data, chart_type, cfg)
     # ----- End Adding Element Columns

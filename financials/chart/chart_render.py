@@ -117,16 +117,8 @@ def render_pies(chart_elements: pd.DataFrame,
     unit = figure_data.iloc[0]["currency_unit"]
     is_percent = "percent" in unit
 
-    def scale_font(scaling, low, high):
-        size = int(max(frame_width,frame_height) * scaling)
-        if size < low:
-            return low
-        if size > high:
-            return high
-        return size
-
-    title_font_size = scale_font(0.03,14,24)
-    label_font_size = scale_font(0.02,9,12)
+    title_font_size = 12
+    label_font_size = 10
 
     # ---- Canonical grid extents ----
     year_rows   = figure_data["grid_year"].max() + 1
@@ -202,7 +194,7 @@ def render_pies(chart_elements: pd.DataFrame,
         ax = fig.add_axes([left, bottom, width, height])
 
         # ---- Geometry delegated entirely to Matplotlib ----
-        ax.pie(
+        wedges,texts = ax.pie(
             values,
             colors=colors,
             labels=label_list,
@@ -213,6 +205,12 @@ def render_pies(chart_elements: pd.DataFrame,
                 "va": "center",
             },
         )
+
+        for pct, text in zip(values, texts):
+            if pct < 3:
+                text.set_fontsize(label_font_size - 3)
+            elif pct < 5:
+                text.set_fontsize(label_font_size - 1)
 
         ax.set_aspect("equal")
         ax.set_axis_off()
@@ -226,6 +224,73 @@ def render_pies(chart_elements: pd.DataFrame,
         )
 
     return fig
+
+
+def adjust_margin(fig, ax, orientation : str):
+    """
+    Adjusts axes of plot to accommodate labels and titles
+    :param fig: Figure containing axes
+    :param ax: Axes object
+    :param orientation: 'Horizontal' or 'Vertical'
+    """
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+
+    fig_width_pixels  = fig.get_figwidth() * fig.dpi
+    fig_height_pixels = fig.get_figheight() * fig.dpi
+
+    # ---------------------------------------------------------
+    # 1) Shrink title font if it exceeds available figure width
+    # ---------------------------------------------------------
+    title = ax.title
+    if title.get_text():
+
+        max_title_width = fig_width_pixels * 0.95  # allow 5% padding
+
+        title_bbox = title.get_window_extent(renderer=renderer)
+        title_width = title_bbox.width
+
+        if title_width > max_title_width:
+            scale = max_title_width / title_width
+            new_size = max(6, title.get_fontsize() * scale)
+            title.set_fontsize(new_size)
+            fig.canvas.draw()
+            renderer = fig.canvas.get_renderer()
+
+    # ---------------------------------------------------------
+    # 2) Adjust margins based on tick label size
+    # ---------------------------------------------------------
+    if orientation == "horizontal":
+        labels = ax.get_yticklabels()
+        max_pixels = max(
+            label.get_window_extent(renderer=renderer).width
+            for label in labels
+        ) if labels else 0
+
+        left = (max_pixels + 16) / fig_width_pixels
+
+        ax.set_position([
+            left,      # left
+            0.05,      # bottom
+            0.95 - left,  # width
+            0.90       # height
+        ])
+
+    else:
+        labels = ax.get_xticklabels()
+        max_pixels = max(
+            label.get_window_extent(renderer=renderer).height
+            for label in labels
+        ) if labels else 0
+
+        bottom = (max_pixels + 16) / fig_height_pixels
+
+        ax.set_position([
+            0.05,          # left
+            bottom,        # bottom
+            0.90,          # width
+            0.95 - bottom  # height
+        ])
 
 
 def render_bars(chart_elements: pd.DataFrame,
@@ -244,65 +309,13 @@ def render_bars(chart_elements: pd.DataFrame,
     title_font_size       = 11
     major_label_font_size = 8
 
-    # ---- Grid extents ----
-    if "grid_year" in figure_data.columns and "grid_period" in figure_data.columns:
-        year_rows   = figure_data["grid_year"].max() + 1
-        period_cols = figure_data["grid_period"].max() + 1
-
-        if year_rows <= period_cols:
-            row_field = "grid_year"
-            col_field = "grid_period"
-            n_rows = year_rows
-            n_cols = period_cols
-        else:
-            row_field = "grid_period"
-            col_field = "grid_year"
-            n_rows = period_cols
-            n_cols = year_rows
-    else:
-        row_field = None
-        col_field = None
-        n_rows = 1
-        n_cols = 1
-
-    fig_width_px  = n_cols * frame_width
-    fig_height_px = n_rows * frame_height
-
     fig = plt.figure(
-        figsize=(fig_width_px / dpi, fig_height_px / dpi),
+        figsize=(frame_width / dpi, frame_height / dpi),
         dpi=dpi,
     )
 
     color_count = chart_elements["color"].max()
     palette = get_color_palette(color_count)
-
-    # ---- Helper: adjust margin based on rendered tick labels ----
-    def adjust_margin(ax):
-        fig.canvas.draw()
-        renderer = fig.canvas.get_renderer()
-
-        fig_width_pixels  = fig.get_figwidth() * fig.dpi
-        fig_height_pixels = fig.get_figheight() * fig.dpi
-
-        if orientation == "horizontal":
-            labels = ax.get_yticklabels()
-            max_pixels = max(
-                label.get_window_extent(renderer=renderer).width
-                for label in labels
-            ) if labels else 0
-
-            left = (max_pixels + 16) / fig_width_pixels
-            ax.set_position([left, 0.05, 0.95 - left, 0.90])
-
-        else:
-            labels = ax.get_xticklabels()
-            max_pixels = max(
-                label.get_window_extent(renderer=renderer).height
-                for label in labels
-            ) if labels else 0
-
-            bottom = (max_pixels + 16) / fig_height_pixels
-            ax.set_position([0.05, bottom, 0.90, 0.95 - bottom])
 
     # ---- Render each bar chart independently ----
     for _, fig_row in figure_data.iterrows():
@@ -331,9 +344,8 @@ def render_bars(chart_elements: pd.DataFrame,
         color_idx = df["color"].values - 1
         colors = [palette[i] for i in color_idx]
 
-        # Temporary full-area axes
+        # Temporary full-area axes, overriden below by adjust_margin
         ax = fig.add_axes([0.05, 0.05, 0.90, 0.90])
-        ax.tick_params(labelsize=major_label_font_size)
 
         positions = df["elem_pos"].values
 
@@ -343,6 +355,8 @@ def render_bars(chart_elements: pd.DataFrame,
 
             ax.set_yticks(positions)
             ax.set_yticklabels(main_bar_labels, fontsize=major_label_font_size)
+
+            ax.margins(y=0)
             ax.invert_yaxis()
 
         else:
@@ -355,6 +369,7 @@ def render_bars(chart_elements: pd.DataFrame,
                 rotation=90,
                 fontsize=major_label_font_size
             )
+            ax.margins(x=0)
 
         ax.tick_params(axis="both", which="both", length=0)
 
@@ -366,6 +381,6 @@ def render_bars(chart_elements: pd.DataFrame,
         )
 
         # ---- Precise margin adjustment ----
-        adjust_margin(ax)
+        adjust_margin(fig, ax, orientation)
 
     return fig
