@@ -14,7 +14,7 @@ from financials.chart.chart_common import (
     figure_to_bytes
 )
 
-from financials.chart.chart_render import render_pies, render_bars
+from financials.chart.chart_render import render_pies, render_bars, render_area
 
 def compute_chart_data(args: dict) -> DataFrame:
     chart_type = args.get("chart")
@@ -73,7 +73,7 @@ def api_chart_data():
         }), 500
 
 
-@app.route("/api/charts/figures")
+@app.route("/api/charts/figure")
 def api_figure_data():
     try:
         args = request.args.to_dict()
@@ -133,6 +133,11 @@ def api_chart_render():
             figure = render_bars(
                 chart_elements=chart_elements,
                 figure_data=fig_data
+            )
+        elif 'area' in chart_type:
+            figure = render_area(
+                chart_elements=chart_elements,
+                figure_data=fig_data,
             )
 
         if not figure:

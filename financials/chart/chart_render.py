@@ -293,6 +293,100 @@ def adjust_margin(fig, ax, orientation : str):
         ])
 
 
+def adjust_margin_area(fig, ax, legend):
+    """
+    Adjust figure to accommodate:
+    - Title width (shrink if needed)
+    - Y-axis label width (left margin)
+    - Legend placed outside right
+
+    frame_width defines plot width.
+    Figure expands; plot width remains constant.
+    """
+
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+
+    dpi = fig.dpi
+
+    # ---------------------------------------------------------
+    # 1) Current figure size
+    # ---------------------------------------------------------
+    fig_width_px  = fig.get_figwidth() * dpi
+    fig_height_px = fig.get_figheight() * dpi
+
+    ax_pos = ax.get_position()
+
+    # Pixel width of plot area (preserve this)
+    plot_width_px = ax_pos.width * fig_width_px
+
+    # ---------------------------------------------------------
+    # 2) Shrink title if needed
+    # ---------------------------------------------------------
+    title = ax.title
+    if title.get_text():
+
+        max_title_width = fig_width_px * 0.95
+        title_bbox = title.get_window_extent(renderer=renderer)
+        title_width = title_bbox.width
+
+        if title_width > max_title_width:
+            scale = max_title_width / title_width
+            new_size = max(6, title.get_fontsize() * scale)
+            title.set_fontsize(new_size)
+            fig.canvas.draw()
+            renderer = fig.canvas.get_renderer()
+
+    # ---------------------------------------------------------
+    # 3) Measure Y-axis label width (left margin)
+    # ---------------------------------------------------------
+    y_labels = ax.get_yticklabels()
+
+    if y_labels:
+        max_y_label_px = max(
+            label.get_window_extent(renderer=renderer).width
+            for label in y_labels
+        )
+    else:
+        max_y_label_px = 0
+
+    left_padding_px = 16
+    left_margin_px = max_y_label_px + left_padding_px
+
+    # ---------------------------------------------------------
+    # 4) Measure legend width (right margin)
+    # ---------------------------------------------------------
+    legend_bbox = legend.get_window_extent(renderer=renderer)
+    legend_width_px = legend_bbox.width
+
+    right_padding_px = 12
+    right_margin_px = legend_width_px + right_padding_px
+
+    # ---------------------------------------------------------
+    # 5) Compute new figure width
+    # ---------------------------------------------------------
+    new_fig_width_px = left_margin_px + plot_width_px + right_margin_px
+    new_fig_width_in = new_fig_width_px / dpi
+
+    fig.set_size_inches(new_fig_width_in, fig.get_figheight(), forward=True)
+    fig.canvas.draw()
+
+    # ---------------------------------------------------------
+    # 6) Recalculate normalized axes position
+    # ---------------------------------------------------------
+    new_left_fraction = left_margin_px / new_fig_width_px
+    new_width_fraction = plot_width_px / new_fig_width_px
+
+    ax.set_position([
+        new_left_fraction,
+        ax_pos.y0,
+        new_width_fraction,
+        ax_pos.height
+    ])
+
+    fig.canvas.draw()
+
+
 def render_bars(chart_elements: pd.DataFrame,
                 figure_data: pd.DataFrame) -> plt.figure:
 
@@ -385,3 +479,94 @@ def render_bars(chart_elements: pd.DataFrame,
         adjust_margin(fig, ax, orientation)
 
     return fig
+
+def render_area(chart_elements: pd.DataFrame,
+                figure_data: pd.DataFrame) -> plt.figure:
+
+    frame_width  = figure_data.iloc[0]["frame_width"]
+    frame_height = figure_data.iloc[0]["frame_height"]
+    dpi          = figure_data.iloc[0]["dpi"]
+
+    title_font_size       = 11
+    major_label_font_size = 8
+    legend_font_size      = major_label_font_size - 2
+
+    fig = plt.figure(
+        figsize=(frame_width / dpi, frame_height / dpi),
+        dpi=dpi,
+    )
+
+    color_count = chart_elements["color"].max()
+    palette = get_color_palette(color_count)
+
+    for _, fig_row in figure_data.iterrows():
+
+        chart_index = fig_row["fig_index"]
+        df = chart_elements[chart_elements["chart_index"] == chart_index]
+
+        data_col        = fig_row["currency_col"]
+        currency_format = fig_row["currency_format"]
+
+        # ---- X axis (time) ----
+        time_positions = df["time_pos"].drop_duplicates().values
+        time_labels    = df["period"].drop_duplicates().values
+
+        # ---- Series order (stack order) ----
+        assignments = df["assignment"].drop_duplicates().values
+
+        # ---- Build stacked series vectors ----
+        stack_values = []
+        stack_labels = []
+        stack_colors = []
+
+        for asn in assignments:
+            series_df = df[df["assignment"] == asn]
+            y = series_df[data_col].values
+            stack_values.append(y)
+
+            stack_labels.append(series_df["label"].iloc[0])
+
+            color_index = series_df["color"].iloc[0] - 1
+            stack_colors.append(palette[color_index])
+
+        # ---- Temporary full-width axes ----
+        ax = fig.add_axes([0.05, 0.05, 0.90, 0.90])
+        ax.tick_params(labelsize=major_label_font_size)
+
+        # ---- Stackplot ----
+        ax.stackplot(
+            time_positions,
+            stack_values,
+            colors=stack_colors,
+        )
+
+        # ---- Axis formatting ----
+        ax.set_xticks(time_positions)
+        ax.set_xticklabels(time_labels, fontsize=major_label_font_size)
+
+        ax.yaxis.set_major_formatter(StrMethodFormatter(currency_format))
+
+        ax.margins(x=0)
+        ax.tick_params(axis="both", which="both", length=4)
+
+        ax.set_title(
+            fig_row["title"],
+            fontsize=title_font_size,
+            y=1.01,
+            pad=0,
+        )
+
+        # ---- Legend (outside right) ----
+        legend = ax.legend(
+            stack_labels,
+            loc="center left",
+            bbox_to_anchor=(1.01, 0.5),
+            fontsize=legend_font_size,
+            frameon=False,
+        )
+
+        # ---- Dynamic right margin adjustment ----
+        adjust_margin_area(fig, ax, legend)
+
+    return fig
+

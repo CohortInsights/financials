@@ -9,7 +9,7 @@ global_chart_types: dict = {
 }
 
 bar_element_size = 40   # Thickness of any bar in a bar chart
-area_element_size = 300 # Number of areas * this number equals height of stacked area plot
+area_element_size = 15 # Number of areas * this number equals height of stacked area plot
 pie_slice_size = 75     # Number of slices * this number equals size of square pie area
 min_frame_size = 700  # No dimension should be shorter than this size
 
@@ -97,7 +97,7 @@ def add_cluster_index_columns(chart_data: DataFrame, cluster_cols : list[str]):
         rank_map = {v: i for i, v in enumerate(values.drop_duplicates())}
         parent_df.loc[sub_df.index, f"{cluster_col}_index"] = values.map(rank_map)
 
-    for _, sub_df in chart_data.groupby(by=["chart_index"], sort=False):
+    for _, sub_df in chart_data.groupby(by=['chart_index','level'], sort=False):
         for col in cluster_cols:
             add_cluster_index(chart_data, sub_df, col)
 
@@ -393,8 +393,9 @@ def add_frame_dimensions(fig_data : DataFrame, chart_elements : DataFrame, chart
         elem_plot_size = max(elem_plot_size, min_frame_size)
         # elem_plot_size = max(size1, min_frame_size)
         if 'area' in chart_type:
-            frame_width = min_frame_size
             frame_height = n_elements * area_element_size
+            width = max(min_frame_size, 0.7 * frame_height)
+            frame_width = width
         elif 'bar' in chart_type:
             orient = orientations[idx]
             if orient == "horizontal":
@@ -519,11 +520,45 @@ def compute_figure_data(chart_elements : DataFrame, chart_type : str, cfg : dict
     return fig_df
 
 
-def fill_missing_assignments(chart_data: DataFrame) -> DataFrame:
+def remove_missing_area_assignments(chart_data: pd.DataFrame) -> pd.DataFrame:
+    """
+    Remove assignments that do not appear across all time_pos
+    within each chart_index.
+
+    - Preserves original row order
+    - No sorting
+    - Operates per chart_index
+    """
 
     output_frames = []
 
-    for _, sub_df in chart_data.groupby(["level"], sort=False):
+    for chart_index, df in chart_data.groupby("chart_index", sort=False):
+
+        # Authoritative time set
+        time_positions = df["time_pos"].drop_duplicates()
+        n_time_points = len(time_positions)
+
+        # Count time occurrences per assignment
+        counts = (
+            df.groupby("assignment", sort=False)["time_pos"]
+              .nunique()
+        )
+
+        # Keep only assignments that appear in all time points
+        valid_assignments = counts[counts == n_time_points].index
+
+        filtered_df = df[df["assignment"].isin(valid_assignments)]
+
+        output_frames.append(filtered_df)
+
+    return pd.concat(output_frames, ignore_index=True)
+
+
+def fill_missing_bar_assignments(chart_data: DataFrame) -> DataFrame:
+
+    output_frames = []
+
+    for _, sub_df in chart_data.groupby(["chart_index","level"], sort=False):
 
         # --- Unique grid axes ---
         assignments = sub_df["assignment"].drop_duplicates()
@@ -573,27 +608,26 @@ def compute_chart_elements(source_data : DataFrame, chart_type : str, cfg : dict
     """
     # Chart data starts as copy of input data
     chart_data = source_data.copy()
-    if 'bar' in chart_type:
-        chart_data = fill_missing_assignments(chart_data)
-    # Add enriched chart data one column at a time
     # ----- Begin Adding Element Columns
     add_row_indexes(chart_data)
     add_chart_indexes(chart_data,chart_type)
     add_time_pos_column(chart_data, cfg)
+    if 'bar' in chart_type:
+        chart_data = fill_missing_bar_assignments(chart_data)
+    elif 'area' in chart_type:
+        chart_data = remove_missing_area_assignments(chart_data)
+    # Add enriched chart data one column at a time
     add_label_column(chart_data,chart_type)
     add_parent_column(chart_data, chart_type)
     add_stats_columns(chart_data, chart_type, cfg)
     add_ignore_column(chart_data, cfg)
-    if 'bar' in chart_type:
-        # chart_data = drop_asn_rows_with_ignore(chart_data)
-        add_values_column(chart_data, chart_type, cfg)
-    else:
-        add_values_column(chart_data, chart_type, cfg)
-        merge_ignore_rows_into_other(chart_data, cfg)
+    add_values_column(chart_data, chart_type, cfg)
+    if 'pie' in chart_type:
+          merge_ignore_rows_into_other(chart_data, cfg)
     if 'bar' in chart_type:
         cluster_cols = ['sort_year', 'assignment', 'sort_period']
         add_cluster_index_columns(chart_data, cluster_cols)
-        chart_data.sort_values(by=["sort_period","assignment_index","sort_year"], inplace=True)
+        chart_data.sort_values(by=["cluster_index","level","sort_period","assignment_index","sort_year"], inplace=True)
         add_element_pos_column(chart_data, ['assignment','sort_period'])
     add_color_column(chart_data, chart_type, cfg)
     # ----- End Adding Element Columns
