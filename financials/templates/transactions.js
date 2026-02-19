@@ -230,6 +230,19 @@ function renderYearCheckboxes(containerId, years) {
   });
 }
 
+// --- Fix DataTables column sizing when Transactions tab becomes visible ---
+document.addEventListener('DOMContentLoaded', function () {
+  const tabBtn = document.getElementById('transactions-tab');
+  if (!tabBtn) return;
+
+  tabBtn.addEventListener('shown.bs.tab', function () {
+    if ($.fn.DataTable.isDataTable('#transactions')) {
+      $('#transactions').DataTable().columns.adjust();
+    }
+  });
+});
+
+
 function initTransactions() {
   console.log("🚀 Initializing transaction dashboard");
 

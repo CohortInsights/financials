@@ -235,6 +235,18 @@ function renderAssignmentsYearCheckboxes(years) {
     });
 }
 
+// --- Fix DataTables column sizing when Assignments tab becomes visible ---
+document.addEventListener('DOMContentLoaded', function () {
+    const tabBtn = document.getElementById('assignments-tab');
+    if (!tabBtn) return;
+
+    tabBtn.addEventListener('shown.bs.tab', function () {
+        if ($.fn.DataTable.isDataTable('#assignments')) {
+            $('#assignments').DataTable().columns.adjust();
+        }
+    });
+});
+
 function initAssignments() {
     console.log("📘 Initializing Assignments tab");
 
