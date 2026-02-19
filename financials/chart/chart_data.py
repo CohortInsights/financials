@@ -11,7 +11,7 @@ global_chart_types: dict = {
 bar_element_size = 30   # Thickness of any bar in a bar chart
 area_element_size = 20 # Number of areas * this number equals height of stacked area plot
 pie_slice_size = 50     # Number of slices * this number equals size of square pie area
-min_frame_size = 600  # No dimension should be shorter than this size
+min_frame_size = 750  # No dimension should be shorter than this size
 
 
 def get_char_types() -> dict:
