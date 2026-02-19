@@ -6,11 +6,15 @@ var assignmentsTable = null;
 // --- Duration selection state ---
 let currentDuration = "year";
 
+// --- View selection state ---
+let currentView = "table";
+
 // --- Reload Assignments table when rules change ---
 window.addEventListener("ruleSaved", () => {
     if (assignmentsTable) {
         console.log("🔔 ruleSaved → reloading assignments NOW");
         loadAssignments();
+        if (currentView !== "table") renderAssignmentsChart();
     } else {
         console.log("🔔 ruleSaved → assignments not initialized yet");
     }
@@ -21,6 +25,28 @@ function getSelectedAssignmentYears() {
     return Array.from(
         document.querySelectorAll('#assignmentsYearSelector input[type=checkbox]:checked')
     ).map(cb => cb.value);
+}
+
+// --- Read footer filter values (raw, backend-safe) ---
+function getAssignmentsFooterFilters() {
+    if (!assignmentsTable) {
+        return { asn: "", level: "" };
+    }
+
+    const asnInput = assignmentsTable
+        .column(1)
+        .footer()
+        ?.querySelector("input");
+
+    const levelInput = assignmentsTable
+        .column(4)
+        .footer()
+        ?.querySelector("input");
+
+    return {
+        asn: asnInput ? asnInput.value.trim() : "",
+        level: levelInput ? levelInput.value.trim() : ""
+    };
 }
 
 // --- Load assignments data from API ---
@@ -45,10 +71,31 @@ function loadAssignments() {
             } else {
                 buildAssignmentsTable(data);
             }
+
+            if (currentView !== "table") renderAssignmentsChart();
         })
         .catch(err => {
             console.error("❌ Error loading assignments:", err);
         });
+}
+
+// --- Render chart image ---
+function renderAssignmentsChart() {
+    const years = getSelectedAssignmentYears().join(',');
+    if (!years) return;
+
+    const { asn, level } = getAssignmentsFooterFilters();
+
+    const params = new URLSearchParams({
+        chart: currentView,
+        years: years,
+        duration: currentDuration,
+        asn: asn || "",
+        level: level || ""
+    });
+
+    const img = document.getElementById("assignmentsChartImage");
+    img.src = `/api/charts/render?${params.toString()}`;
 }
 
 // --- Build the Assignments DataTable ---
@@ -68,14 +115,11 @@ function buildAssignmentsTable(data) {
             {
                 data: null,
                 title: 'Action',
-                render: () => ""   // Blank for now
+                render: () => ""
             }
         ],
-
-        // NEW: Disable all client-side sorting and respect backend order fully
         order: [],
         ordering: false,
-
         scrollY: '70vh',
         scrollCollapse: true,
         paging: true,
@@ -91,14 +135,6 @@ function addAssignmentFilters() {
         const column = this;
         const idx = column.index();
 
-        // Column indices:
-        // 0 = Period (no filter)
-        // 1 = Assignment (filter)
-        // 2 = Count (no filter)
-        // 3 = Amount (no filter)
-        // 4 = Level (filter)
-        // 5 = Action (none)
-
         if (!(idx === 1 || idx === 4)) {
             $(column.footer()).empty();
             return;
@@ -112,53 +148,19 @@ function addAssignmentFilters() {
 
         $(column.footer()).empty().append(input);
 
-        // --- Assignment filter
-        if (idx === 1) {
-            $(input).on('keyup change clear', debounce(function () {
-                let raw = this.value.trim().toLowerCase();
-                if (raw === "") {
-                    column.search("", true, false).draw();
-                    return;
-                }
-
-                let tokens = raw.split(',')
-                    .map(s => s.trim())
-                    .filter(s => s.length > 0);
-
-                let pattern = tokens.map(t => `(?=.*${t})`).join("|");
-                column.search(pattern, true, false).draw();
-            }, 150));
-        }
-
-        // --- Level filter
-        if (idx === 4) {
-            $(input).on('keyup change clear', debounce(function () {
-                let raw = this.value.trim();
-                if (raw === "") {
-                    column.search("", true, false).draw();
-                    return;
-                }
-
-                let nums = raw.split(',')
-                    .map(s => s.trim())
-                    .filter(s => /^\d+$/.test(s));
-
-                if (nums.length === 0) {
-                    column.search("", true, false).draw();
-                    return;
-                }
-
-                let pattern = nums.map(n => `^${n}$`).join("|");
-                column.search(pattern, true, false).draw();
-            }, 150));
-        }
+        $(input).on('keyup change clear', debounce(function () {
+            column.search(this.value).draw();
+            if (currentView !== "table") renderAssignmentsChart();
+        }, 150));
     });
 }
 
 // --- Year selector event listeners ---
 function attachAssignmentYearListeners() {
     const checkboxes = document.querySelectorAll('#assignmentsYearSelector input[type=checkbox]');
-    checkboxes.forEach(cb => cb.addEventListener('change', loadAssignments));
+    checkboxes.forEach(cb => cb.addEventListener('change', () => {
+        loadAssignments();
+    }));
 }
 
 // --- Duration segmented-button listeners ---
@@ -172,7 +174,6 @@ function attachDurationListeners() {
 
             currentDuration = newValue;
 
-            // Update button visual state
             buttons.forEach(b => b.classList.remove("active"));
             btn.classList.add("active");
 
@@ -182,6 +183,34 @@ function attachDurationListeners() {
     });
 }
 
+// --- View selector listeners ---
+function attachViewListeners() {
+    const buttons = document.querySelectorAll('#assignmentsViewSelector button');
+
+    buttons.forEach(btn => {
+        btn.addEventListener('click', () => {
+            const newView = btn.getAttribute("data-view");
+            if (!newView) return;
+
+            currentView = newView;
+
+            buttons.forEach(b => b.classList.remove("active"));
+            btn.classList.add("active");
+
+            const tableWrapper = document.getElementById("assignments_wrapper");
+            const chartContainer = document.getElementById("assignmentsChartContainer");
+
+            if (currentView === "table") {
+                if (tableWrapper) tableWrapper.style.display = "";
+                chartContainer.style.display = "none";
+            } else {
+                if (tableWrapper) tableWrapper.style.display = "none";
+                chartContainer.style.display = "";
+                renderAssignmentsChart();
+            }
+        });
+    });
+}
 
 function renderAssignmentsYearCheckboxes(years) {
     const container = document.getElementById("assignmentsYearSelector");
@@ -216,9 +245,9 @@ function initAssignments() {
 
             renderAssignmentsYearCheckboxes(years);
 
-            // IMPORTANT: listeners must come AFTER rendering
             attachAssignmentYearListeners();
             attachDurationListeners();
+            attachViewListeners();
 
             loadAssignments();
         })
