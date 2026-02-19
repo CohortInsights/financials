@@ -8,10 +8,10 @@ global_chart_types: dict = {
     "stacked_area": "evolution of assignment amounts over time, with areas stacked on top of each other to show both individual trends and the total, cumulative trend"
 }
 
-bar_element_size = 40   # Thickness of any bar in a bar chart
+bar_element_size = 30   # Thickness of any bar in a bar chart
 area_element_size = 20 # Number of areas * this number equals height of stacked area plot
-pie_slice_size = 75     # Number of slices * this number equals size of square pie area
-min_frame_size = 700  # No dimension should be shorter than this size
+pie_slice_size = 50     # Number of slices * this number equals size of square pie area
+min_frame_size = 600  # No dimension should be shorter than this size
 
 
 def get_char_types() -> dict:
