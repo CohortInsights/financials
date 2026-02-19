@@ -226,18 +226,19 @@ def render_pies(chart_elements: pd.DataFrame,
     return fig
 
 
-def adjust_margin(fig, ax, orientation : str):
+def adjust_margin(fig, ax, orientation: str):
     """
     Adjusts axes of plot to accommodate labels and titles
-    :param fig: Figure containing axes
-    :param ax: Axes object
-    :param orientation: 'Horizontal' or 'Vertical'
+    using pixel-stable spacing so dynamic figure height
+    does not inflate top margins.
     """
+
     fig.canvas.draw()
     renderer = fig.canvas.get_renderer()
 
-    fig_width_pixels  = fig.get_figwidth() * fig.dpi
-    fig_height_pixels = fig.get_figheight() * fig.dpi
+    dpi = fig.dpi
+    fig_width_pixels  = fig.get_figwidth() * dpi
+    fig_height_pixels = fig.get_figheight() * dpi
 
     # ---------------------------------------------------------
     # 1) Shrink title font if it exceeds available figure width
@@ -245,7 +246,7 @@ def adjust_margin(fig, ax, orientation : str):
     title = ax.title
     if title.get_text():
 
-        max_title_width = fig_width_pixels * 0.95  # allow 5% padding
+        max_title_width = fig_width_pixels * 0.95
 
         title_bbox = title.get_window_extent(renderer=renderer)
         title_width = title_bbox.width
@@ -258,9 +259,14 @@ def adjust_margin(fig, ax, orientation : str):
             renderer = fig.canvas.get_renderer()
 
     # ---------------------------------------------------------
-    # 2) Adjust margins based on tick label size
+    # 2) Adjust margins based on orientation
     # ---------------------------------------------------------
+    fixed_top_padding_px = 60
+    top_fraction = 1 - (fixed_top_padding_px / fig_height_pixels)
+
     if orientation == "horizontal":
+
+        # ----- LEFT MARGIN (based on Y tick labels) -----
         labels = ax.get_yticklabels()
         max_pixels = max(
             label.get_window_extent(renderer=renderer).width
@@ -268,15 +274,18 @@ def adjust_margin(fig, ax, orientation : str):
         ) if labels else 0
 
         left = (max_pixels + 16) / fig_width_pixels
+        bottom = 0.05
 
         ax.set_position([
-            left,      # left
-            0.05,      # bottom
-            0.95 - left,  # width
-            0.90       # height
+            left,
+            bottom,
+            0.95 - left,
+            top_fraction - bottom
         ])
 
     else:
+
+        # ----- BOTTOM MARGIN (based on X tick labels) -----
         labels = ax.get_xticklabels()
         max_pixels = max(
             label.get_window_extent(renderer=renderer).height
@@ -285,12 +294,28 @@ def adjust_margin(fig, ax, orientation : str):
 
         bottom = (max_pixels + 16) / fig_height_pixels
 
+        ax_pos = ax.get_position()
+
         ax.set_position([
-            0.05,          # left
-            bottom,        # bottom
-            0.90,          # width
-            0.95 - bottom  # height
+            ax_pos.x0,
+            bottom,
+            ax_pos.width,
+            top_fraction - bottom
         ])
+
+    fig.subplots_adjust(top=top_fraction)
+
+    # ---------------------------------------------------------
+    # 3) Stabilize title spacing relative to axes (pixel-based)
+    # ---------------------------------------------------------
+    title = ax.title
+    if title.get_text():
+
+        fixed_title_gap_px = 14
+        title_offset = fixed_title_gap_px / fig_height_pixels
+
+        # Place title slightly above axes top (axes coordinates)
+        title.set_y(1.0 + title_offset)
 
 
 def adjust_margin_area(fig, ax, legend):
@@ -489,7 +514,7 @@ def render_area(chart_elements: pd.DataFrame,
 
     title_font_size       = 11
     major_label_font_size = 8
-    legend_font_size      = major_label_font_size - 2
+    legend_font_size      = major_label_font_size - 1
 
     fig = plt.figure(
         figsize=(frame_width / dpi, frame_height / dpi),
@@ -533,8 +558,8 @@ def render_area(chart_elements: pd.DataFrame,
         ax = fig.add_axes([0.05, 0.05, 0.90, 0.90])
         ax.tick_params(labelsize=major_label_font_size)
 
-        # ---- Stackplot ----
-        ax.stackplot(
+        # ---- Stackplot (capture polys) ----
+        polys = ax.stackplot(
             time_positions,
             stack_values,
             colors=stack_colors,
@@ -556,9 +581,10 @@ def render_area(chart_elements: pd.DataFrame,
             pad=0,
         )
 
-        # ---- Legend (outside right) ----
+        # ---- Legend (outside right, reversed to match visual stack) ----
         legend = ax.legend(
-            stack_labels,
+            polys[::-1],
+            stack_labels[::-1],
             loc="center left",
             bbox_to_anchor=(1.01, 0.5),
             fontsize=legend_font_size,
