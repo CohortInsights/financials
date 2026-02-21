@@ -164,7 +164,7 @@ table.dataTable tfoot input {
 }
 
 /* Transactions tab: center the year selector */
-#tab-transactions .year-selector {
+#tab-transactions > .year-selector {
     margin-left: auto;
     margin-right: auto;
     justify-content: center;

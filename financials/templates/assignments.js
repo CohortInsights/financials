@@ -54,9 +54,12 @@ function loadAssignments() {
     const years = getSelectedAssignmentYears();
     const param = years.join(',');
 
-    const url =
+    const ytdChecked = document.getElementById("assignmentsYtdCheckbox")?.checked;
+    let url =
         `/api/assigned_transactions?years=${param}&duration=${currentDuration}&expand=1`;
-
+    if (ytdChecked) {
+        url += "&ytd=true";
+    }
     console.log("📘 loadAssignments() →", url);
 
     fetch(url, { cache: "no-store" })
@@ -155,12 +158,16 @@ function addAssignmentFilters() {
     });
 }
 
-// --- Year selector event listeners ---
 function attachAssignmentYearListeners() {
     const checkboxes = document.querySelectorAll('#assignmentsYearSelector input[type=checkbox]');
-    checkboxes.forEach(cb => cb.addEventListener('change', () => {
-        loadAssignments();
-    }));
+    checkboxes.forEach(cb =>
+        cb.addEventListener('change', loadAssignments)
+    );
+
+    const ytd = document.getElementById("assignmentsYtdCheckbox");
+    if (ytd) {
+        ytd.addEventListener("change", loadAssignments);
+    }
 }
 
 // --- Duration segmented-button listeners ---
@@ -237,14 +244,21 @@ function renderAssignmentsYearCheckboxes(years) {
 
 // --- Fix DataTables column sizing when Assignments tab becomes visible ---
 document.addEventListener('DOMContentLoaded', function () {
-    const tabBtn = document.getElementById('assignments-tab');
-    if (!tabBtn) return;
 
-    tabBtn.addEventListener('shown.bs.tab', function () {
-        if ($.fn.DataTable.isDataTable('#assignments')) {
-            $('#assignments').DataTable().columns.adjust();
-        }
-    });
+    const tabBtn = document.getElementById('assignments-tab');
+    if (tabBtn) {
+        tabBtn.addEventListener('shown.bs.tab', function () {
+            if ($.fn.DataTable.isDataTable('#assignments')) {
+                $('#assignments').DataTable().columns.adjust();
+            }
+        });
+    }
+
+    // --- YTD checkbox binding ---
+    const ytd = document.getElementById("assignmentsYtdCheckbox");
+    if (ytd) {
+        ytd.addEventListener("change", loadAssignments);
+    }
 });
 
 function initAssignments() {

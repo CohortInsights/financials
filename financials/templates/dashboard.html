@@ -50,9 +50,18 @@
         <!-- Transactions tab -->
         <div class="tab-pane fade show active" id="tab-transactions" role="tabpanel" aria-labelledby="transactions-tab">
 
+        <div class="d-flex align-items-center mb-2">
             <div id="yearSelector" class="year-selector"></div>
 
-            <button id="reloadButton" class="reload-button">Reload</button>
+            <div class="form-check ms-3">
+                <input class="form-check-input" type="checkbox" id="transactionsYtdCheckbox">
+                <label class="form-check-label" for="transactionsYtdCheckbox">
+                    Compare through today (YTD)
+                </label>
+            </div>
+
+            <button id="reloadButton" class="reload-button ms-3">Reload</button>
+        </div>
 
             <table id="transactions" class="display" style="width:100%">
                 <thead>
@@ -91,6 +100,13 @@
 
                 <!-- Left: Existing year selector -->
                 <div id="assignmentsYearSelector" class="year-selector"></div>
+
+                <div class="form-check ms-3">
+                    <input class="form-check-input" type="checkbox" id="assignmentsYtdCheckbox">
+                    <label class="form-check-label" for="assignmentsYtdCheckbox">
+                        Compare through today (YTD)
+                    </label>
+                </div>
 
                 <!-- Center: duration segmented control -->
                 <div class="mx-auto">

@@ -29,7 +29,12 @@ function getSelectedYears() {
 function loadTransactions() {
   const years = getSelectedYears();
   const param = years.join(',');
-  const url = `/api/transactions?years=${param}`;
+
+  const ytdChecked = document.getElementById("transactionsYtdCheckbox")?.checked;
+  let url = `/api/transactions?years=${param}`;
+  if (ytdChecked) {
+    url += "&ytd=true";
+  }
   console.log("🔁 loadTransactions() called; URL =", url);
 
   fetch(url, { cache: "no-store" })
@@ -232,16 +237,22 @@ function renderYearCheckboxes(containerId, years) {
 
 // --- Fix DataTables column sizing when Transactions tab becomes visible ---
 document.addEventListener('DOMContentLoaded', function () {
-  const tabBtn = document.getElementById('transactions-tab');
-  if (!tabBtn) return;
+    const tabBtn = document.getElementById('transactions-tab');
 
-  tabBtn.addEventListener('shown.bs.tab', function () {
-    if ($.fn.DataTable.isDataTable('#transactions')) {
-      $('#transactions').DataTable().columns.adjust();
+    if (tabBtn) {
+      tabBtn.addEventListener('shown.bs.tab', function () {
+        if ($.fn.DataTable.isDataTable('#transactions')) {
+          $('#transactions').DataTable().columns.adjust();
+        }
+      });
     }
-  });
-});
 
+    // --- YTD checkbox binding ---
+    const ytd = document.getElementById("transactionsYtdCheckbox");
+    if (ytd) {
+      ytd.addEventListener("change", loadTransactions);
+    }
+});
 
 function initTransactions() {
   console.log("🚀 Initializing transaction dashboard");

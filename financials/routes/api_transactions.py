@@ -71,19 +71,58 @@ def compute_transactions(args):
     transactions = db_module.db["transactions"]
     years_param = args.get("years")
     year_param = args.get("year")
+    ytd = args.get("ytd") == "true"
+    print("ytd = " + str(ytd))
 
     query = {}
+
     if years_param:
         year_list = [int(y) for y in years_param.split(",") if y.strip().isdigit()]
         if year_list:
-            query = {"$expr": {"$in": [{"$year": "$date"}, year_list]}}
+            if ytd:
+                today = datetime.now()
+                ranges = []
+
+                for y in year_list:
+                    start = datetime(y, 1, 1)
+                    try:
+                        end = datetime(y, today.month, today.day + 1)
+                    except ValueError:
+                        # Feb 29 safety
+                        end = datetime(y, today.month, today.day)
+
+                    ranges.append({"date": {"$gte": start, "$lt": end}})
+
+                query = {"$or": ranges}
+            else:
+                query = {"$expr": {"$in": [{"$year": "$date"}, year_list]}}
+
     elif year_param and year_param.isdigit():
-        start = datetime(int(year_param), 1, 1)
-        end = datetime(int(year_param) + 1, 1, 1)
+        year = int(year_param)
+        start = datetime(year, 1, 1)
+
+        if ytd:
+            today = datetime.now()
+            try:
+                end = datetime(year, today.month, today.day + 1)
+            except ValueError:
+                end = datetime(year, today.month, today.day)
+        else:
+            end = datetime(year + 1, 1, 1)
+
         query = {"date": {"$gte": start, "$lt": end}}
+
     else:
         current_year = datetime.now().year
-        query = {"$expr": {"$in": [{"$year": "$date"}, [current_year]]}}
+        if ytd:
+            today = datetime.now()
+            try:
+                end = datetime(current_year, today.month, today.day + 1)
+            except ValueError:
+                end = datetime(current_year, today.month, today.day)
+            query = {"date": {"$gte": datetime(current_year, 1, 1), "$lt": end}}
+        else:
+            query = {"$expr": {"$in": [{"$year": "$date"}, [current_year]]}}
 
     cursor = transactions.find(query, {"_id": 0})
     df = pd.DataFrame(list(cursor))
