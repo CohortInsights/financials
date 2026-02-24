@@ -171,9 +171,22 @@ function addAssignmentFilters() {
         $(column.footer()).empty().append(input);
 
         $(input).on('keyup change clear', debounce(function () {
-            column.search(this.value).draw();
+            const raw = this.value.trim();
+
+            if (!raw) {
+                column.search("").draw();
+            } else {
+                // split on comma → implicit OR
+                const terms = raw.split(",")
+                    .map(s => s.trim())
+                    .filter(s => s.length > 0);
+
+                const regex = terms.join("|");
+                column.search(regex, true, false).draw();  // regex=true
+            }
+
             if (currentView !== "table") renderAssignmentsChart();
-        }, 150));
+        }, 150));;
     });
 }
 
