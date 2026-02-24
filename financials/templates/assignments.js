@@ -22,9 +22,22 @@ window.addEventListener("ruleSaved", () => {
 
 // --- Collect selected years for the Assignments tab ---
 function getSelectedAssignmentYears() {
-    return Array.from(
-        document.querySelectorAll('#assignmentsYearSelector input[type=checkbox]:checked')
-    ).map(cb => cb.value);
+    const from = document.getElementById("assignmentsYearSelector_from")?.value;
+    const to = document.getElementById("assignmentsYearSelector_to")?.value;
+
+    if (!from || !to) return [];
+
+    const start = parseInt(from);
+    const end = parseInt(to);
+
+    if (start > end) return [];
+
+    const years = [];
+    for (let y = start; y <= end; y++) {
+        years.push(y);
+    }
+
+    return years;
 }
 
 // --- Read footer filter values (raw, backend-safe) ---
@@ -97,6 +110,12 @@ function renderAssignmentsChart() {
         level: level || ""
     });
 
+    // --- YTD support ---
+    const ytdChecked = document.getElementById("assignmentsYtdCheckbox")?.checked;
+    if (ytdChecked) {
+        params.set("ytd", "true");
+    }
+
     const img = document.getElementById("assignmentsChartImage");
     img.src = `/api/charts/render?${params.toString()}`;
 }
@@ -159,15 +178,11 @@ function addAssignmentFilters() {
 }
 
 function attachAssignmentYearListeners() {
-    const checkboxes = document.querySelectorAll('#assignmentsYearSelector input[type=checkbox]');
-    checkboxes.forEach(cb =>
-        cb.addEventListener('change', loadAssignments)
-    );
+    const from = document.getElementById("assignmentsYearSelector_from");
+    const to = document.getElementById("assignmentsYearSelector_to");
 
-    const ytd = document.getElementById("assignmentsYtdCheckbox");
-    if (ytd) {
-        ytd.addEventListener("change", loadAssignments);
-    }
+    if (from) from.addEventListener("change", loadAssignments);
+    if (to) to.addEventListener("change", loadAssignments);
 }
 
 // --- Duration segmented-button listeners ---
@@ -219,27 +234,36 @@ function attachViewListeners() {
     });
 }
 
-function renderAssignmentsYearCheckboxes(years) {
-    const container = document.getElementById("assignmentsYearSelector");
+function renderAssignmentYearSelectorRange(containerId, years) {
+    const container = document.getElementById(containerId);
     if (!container) return;
 
     container.innerHTML = "";
     if (!Array.isArray(years) || years.length === 0) return;
 
-    const newest = Math.max(...years);
+    years.sort((a, b) => a - b);
+
+    const maxYear = years[years.length - 1];
+
+    const fromSelect = document.createElement("select");
+    const toSelect = document.createElement("select");
+
+    fromSelect.id = containerId + "_from";
+    toSelect.id = containerId + "_to";
 
     years.forEach(year => {
-        const label = document.createElement("label");
-        const cb = document.createElement("input");
-
-        cb.type = "checkbox";
-        cb.value = String(year);
-        cb.checked = (year === newest);
-
-        label.appendChild(cb);
-        label.append(` ${year}`);
-        container.appendChild(label);
+        fromSelect.add(new Option(year, year));
+        toSelect.add(new Option(year, year));
     });
+
+    // Default: most recent year only
+    fromSelect.value = maxYear;
+    toSelect.value = maxYear;
+
+    container.appendChild(document.createTextNode("From "));
+    container.appendChild(fromSelect);
+    container.appendChild(document.createTextNode(" To "));
+    container.appendChild(toSelect);
 }
 
 // --- Fix DataTables column sizing when Assignments tab becomes visible ---
@@ -269,7 +293,7 @@ function initAssignments() {
         .then(data => {
             const years = data.years || [];
 
-            renderAssignmentsYearCheckboxes(years);
+            renderAssignmentYearSelectorRange("assignmentsYearSelector", years);
 
             attachAssignmentYearListeners();
             attachDurationListeners();

@@ -1,0 +1,79 @@
+    <div class="tab-pane fade" id="tab-assignments" role="tabpanel" aria-labelledby="assignments-tab">
+
+        <!-- Combined controls: year selector + duration selector -->
+        <div class="assignments-header-row mb-3 d-flex align-items-center">
+
+            <!-- Left: Existing year selector -->
+            <div id="assignmentsYearSelector" class="year-selector"></div>
+
+            <div class="form-check ms-3">
+                <input class="form-check-input" type="checkbox" id="assignmentsYtdCheckbox">
+                <label class="form-check-label" for="assignmentsYtdCheckbox">
+                    Compare through today (YTD)
+                </label>
+            </div>
+
+            <!-- Center: duration segmented control -->
+            <div class="mx-auto">
+                <div id="durationSelector" class="btn-group" role="group">
+                    <button type="button" class="btn btn-outline-primary active" data-duration="year">Year</button>
+                    <button type="button" class="btn btn-outline-primary" data-duration="quarter">Quarter</button>
+                    <button type="button" class="btn btn-outline-primary" data-duration="month">Month</button>
+                </div>
+            </div>
+
+            <!-- Right: View selector -->
+            <div id="assignmentsViewSelector" class="btn-group" role="group">
+                <button type="button"
+                        class="btn btn-outline-primary active"
+                        data-view="table">Table</button>
+
+                <button type="button"
+                        class="btn btn-outline-primary"
+                        data-view="pie">Pie</button>
+
+                <button type="button"
+                        class="btn btn-outline-primary"
+                        data-view="bar">Bar</button>
+
+                <button type="button"
+                        class="btn btn-outline-primary"
+                        data-view="area">Area</button>
+            </div>
+
+        </div>
+
+        <table id="assignments" class="display" style="width:100%">
+            <thead>
+                <tr>
+                    <th>Period</th>
+                    <th>Assignment</th>
+                    <th>Count</th>
+                    <th>Amount</th>
+                    <th>Level</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tfoot>
+                <tr>
+                    <th></th>
+                    <th>Assignment</th>
+                    <th></th>
+                    <th></th>
+                    <th>Level</th>
+                    <th></th>
+                </tr>
+            </tfoot>
+            <tbody></tbody>
+        </table>
+
+        <!-- Assignments Chart Container -->
+        <div id="assignmentsChartContainer" style="display:none;">
+            <div style="overflow:auto;">
+                <img id="assignmentsChartImage"
+                     alt="Assignments Chart"
+                     style="max-width:none;">
+            </div>
+        </div>
+
+    </div>

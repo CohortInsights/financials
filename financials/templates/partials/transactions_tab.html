@@ -1,0 +1,43 @@
+<div class="tab-pane fade show active" id="tab-transactions" role="tabpanel" aria-labelledby="transactions-tab">
+
+<div class="d-flex align-items-center mb-2">
+    <div id="yearSelector" class="year-selector"></div>
+
+    <div class="form-check ms-3">
+        <input class="form-check-input" type="checkbox" id="transactionsYtdCheckbox">
+        <label class="form-check-label" for="transactionsYtdCheckbox">
+            Compare through today (YTD)
+        </label>
+    </div>
+
+    <button id="reloadButton" class="reload-button ms-3">Reload</button>
+</div>
+
+    <table id="transactions" class="display" style="width:100%">
+        <thead>
+        <tr>
+            <th>Date</th>
+            <th>Source</th>
+            <th>Description</th>
+            <th>Amount</th>
+            <th>Type</th>
+            <th>Assignment</th>
+            <th>Primary Type</th>
+            <th>Action</th>
+        </tr>
+        </thead>
+        <tfoot>
+        <tr>
+            <th>Date</th>
+            <th>Source</th>
+            <th>Description</th>
+            <th>Amount</th>
+            <th>Type</th>
+            <th>Assignment</th>
+            <th>Primary Type</th>
+            <th>Action</th>
+        </tr>
+        </tfoot>
+        <tbody></tbody>
+    </table>
+</div>

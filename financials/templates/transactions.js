@@ -20,9 +20,22 @@ function debounce(fn, delay = 150) {
 
 // --- Collect selected years from the checkbox group ---
 function getSelectedYears() {
-  return Array.from(
-    document.querySelectorAll('#yearSelector input[type=checkbox]:checked')
-  ).map(cb => cb.value);
+  const from = document.getElementById("yearSelector_from")?.value;
+  const to = document.getElementById("yearSelector_to")?.value;
+
+  if (!from || !to) return [];
+
+  const start = parseInt(from);
+  const end = parseInt(to);
+
+  if (start > end) return [];
+
+  const years = [];
+  for (let y = start; y <= end; y++) {
+    years.push(y);
+  }
+
+  return years;
 }
 
 // --- Fetch and display transactions for selected years ---
@@ -207,32 +220,44 @@ function onAssignClick() {
 }
 
 // --- Watch year checkbox changes to reload table ---
-function attachYearCheckboxListeners() {
-  const checkboxes = document.querySelectorAll('#yearSelector input[type=checkbox]');
-  checkboxes.forEach(cb => cb.addEventListener('change', loadTransactions));
+function attachYearSelectorListeners() {
+  const from = document.getElementById("yearSelector_from");
+  const to = document.getElementById("yearSelector_to");
+
+  if (from) from.addEventListener("change", loadTransactions);
+  if (to) to.addEventListener("change", loadTransactions);
 }
 
-function renderYearCheckboxes(containerId, years) {
+function renderYearSelectorRange(containerId, years) {
   const container = document.getElementById(containerId);
   if (!container) return;
 
   container.innerHTML = "";
   if (!Array.isArray(years) || years.length === 0) return;
 
-  const newest = Math.max(...years);
+  years.sort((a, b) => a - b);
+
+  const maxYear = years[years.length - 1];
+
+  const fromSelect = document.createElement("select");
+  const toSelect = document.createElement("select");
+
+  fromSelect.id = containerId + "_from";
+  toSelect.id = containerId + "_to";
 
   years.forEach(year => {
-    const label = document.createElement("label");
-    const cb = document.createElement("input");
-
-    cb.type = "checkbox";
-    cb.value = String(year);
-    cb.checked = (year === newest);
-
-    label.appendChild(cb);
-    label.append(` ${year}`);
-    container.appendChild(label);
+    fromSelect.add(new Option(year, year));
+    toSelect.add(new Option(year, year));
   });
+
+  // Default: most recent year only
+  fromSelect.value = maxYear;
+  toSelect.value = maxYear;
+
+  container.appendChild(document.createTextNode("From "));
+  container.appendChild(fromSelect);
+  container.appendChild(document.createTextNode(" To "));
+  container.appendChild(toSelect);
 }
 
 // --- Fix DataTables column sizing when Transactions tab becomes visible ---
@@ -262,10 +287,10 @@ function initTransactions() {
     .then(data => {
       const years = data.years || [];
 
-      renderYearCheckboxes("yearSelector", years);
+      renderYearSelectorRange("yearSelector", years);
 
       // IMPORTANT: listeners must be attached AFTER rendering
-      attachYearCheckboxListeners();
+      attachYearSelectorListeners();
 
       // Initial load
       loadTransactions();
